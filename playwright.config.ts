@@ -15,8 +15,9 @@ export default defineConfig({
     { name: 'iphone', use: { ...devices['iPhone 14'] } },
   ],
   webServer: {
-    command: 'npm run preview -- --port 4173 --strictPort',
+    command: 'npm run build && npm run preview -- --port 4173 --strictPort',
     port: 4173,
     reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
   },
 });
