@@ -28,8 +28,11 @@ export class GameAudio {
     }
   }
 
-  private ready(): this is { ctx: AudioContext; master: GainNode; noiseBuf: AudioBuffer } {
-    return !this.muted && this.ctx !== null && this.ctx.state === 'running' && this.master !== null;
+  private active(): { ctx: AudioContext; master: GainNode; noiseBuf: AudioBuffer } | null {
+    if (this.muted || this.ctx === null || this.ctx.state !== 'running' || this.master === null || this.noiseBuf === null) {
+      return null;
+    }
+    return { ctx: this.ctx, master: this.master, noiseBuf: this.noiseBuf };
   }
 
   private tone(
@@ -40,33 +43,35 @@ export class GameAudio {
     peak: number,
     endFreq?: number,
   ): void {
-    if (!this.ready()) return;
-    const t = this.ctx.currentTime + start;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+    const a = this.active();
+    if (!a) return;
+    const t = a.ctx.currentTime + start;
+    const osc = a.ctx.createOscillator();
+    const gain = a.ctx.createGain();
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t);
     if (endFreq !== undefined) osc.frequency.exponentialRampToValueAtTime(Math.max(endFreq, 1), t + dur);
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(gain).connect(this.master);
+    osc.connect(gain).connect(a.master);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   }
 
   private noise(start: number, dur: number, peak: number, filterFreq: number): void {
-    if (!this.ready()) return;
-    const t = this.ctx.currentTime + start;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.noiseBuf;
-    const filter = this.ctx.createBiquadFilter();
+    const a = this.active();
+    if (!a) return;
+    const t = a.ctx.currentTime + start;
+    const src = a.ctx.createBufferSource();
+    src.buffer = a.noiseBuf;
+    const filter = a.ctx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = filterFreq;
-    const gain = this.ctx.createGain();
+    const gain = a.ctx.createGain();
     gain.gain.setValueAtTime(peak, t);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(filter).connect(gain).connect(this.master);
+    src.connect(filter).connect(gain).connect(a.master);
     src.start(t);
     src.stop(t + dur + 0.02);
   }

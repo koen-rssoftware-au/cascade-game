@@ -289,6 +289,9 @@ body {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  background: none;
+  border: none;
+  font-family: inherit;
 }
 
 /* ---------- Settings rows ---------- */

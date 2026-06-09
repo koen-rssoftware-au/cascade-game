@@ -384,7 +384,7 @@ class App {
   }
 
   private async share(score: number, maxChain: number): Promise<void> {
-    const text = STR.share.payload(score, maxChain, currentStreak(this.daily, this.todayKey()));
+    const text = STR.sharePayload.payload(score, maxChain, currentStreak(this.daily, this.todayKey()));
     try {
       if (typeof navigator.share === 'function') {
         await navigator.share({ text });

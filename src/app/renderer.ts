@@ -381,7 +381,6 @@ export class Renderer {
 
   private drawTray(now: number): void {
     void now;
-    const ctx = this.ctx;
     const rects = this.trayRects();
     for (let i = 0; i < 3; i++) {
       const slot = this.tray[i];

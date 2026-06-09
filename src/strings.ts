@@ -73,7 +73,7 @@ export const STR = {
     nothingToRestore: 'No purchases to restore.',
     purchaseThanks: 'Thank you! Ads are gone forever.',
   },
-  share: {
+  sharePayload: {
     payload: (score: number, maxChain: number, streak: number) => {
       const parts = [`Cascade 🟦 Score ${score.toLocaleString('en-US')}`, `Max chain ×${maxChain}`];
       if (streak > 0) parts.push(`Day streak 🔥${streak}`);

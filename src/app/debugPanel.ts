@@ -19,7 +19,7 @@ export function mountDebugPanel(config: MonetizationConfig, extra: Record<string
     input.value = String(config[key]);
     input.addEventListener('change', () => {
       const v = Number(input.value);
-      if (Number.isFinite(v)) (config as Record<string, number>)[key] = v;
+      if (Number.isFinite(v)) (config as unknown as Record<string, number>)[key] = v;
     });
     row.append(span, input);
     panel.appendChild(row);
