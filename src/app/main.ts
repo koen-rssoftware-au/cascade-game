@@ -57,6 +57,10 @@ class App {
   private lastFrame = 0;
   private gameOverPending = false;
   private bannerEl: HTMLElement;
+  // Bumped on every navigation away from a game-over moment (new game, home, second
+  // try). A pending deferred interstitial compares epochs and silently cancels —
+  // an ad must never appear after the player already moved on (§9 design law).
+  private gameOverEpoch = 0;
 
   constructor() {
     this.firstSessionEver = this.stats.firstSessionAt === null;
@@ -74,7 +78,11 @@ class App {
       () => this.now(),
     );
     this.adProvider = new MockAdProvider();
-    this.safeAds = new SafeAdProvider(new UiAdProvider(this.adProvider, this.screens));
+    // §9.1: the visible 2s placeholder is a debug/test affordance. Without the flag
+    // the mock resolves invisibly — v1 production shows no fake ads to players.
+    this.safeAds = new SafeAdProvider(
+      DEBUG_MODE || TEST_MODE ? new UiAdProvider(this.adProvider, this.screens) : this.adProvider,
+    );
     const ownedSkus = this.director.state.removeAdsOwned ? ['remove_ads'] : [];
     this.purchases = new MockPurchases({ owned: ownedSkus, restoreSkus: ownedSkus });
 
@@ -98,7 +106,11 @@ class App {
     });
 
     this.bannerEl = document.getElementById('banner-slot') ?? this.makeBannerSlot();
-    this.screens.onPause = (): void => this.showPause();
+    this.screens.onPause = (): void => {
+      // the run is already over — pausing would let the player dodge the game-over commit
+      if (this.gameOverPending || this.game === null || this.game.state.over) return;
+      this.showPause();
+    };
 
     window.addEventListener('resize', () => this.renderer.resize());
     window.visualViewport?.addEventListener('resize', () => this.renderer.resize());
@@ -128,11 +140,15 @@ class App {
     if (saved !== null) {
       try {
         const game = Game.deserialize(saved);
-        if (!game.state.over) {
-          this.game = game;
-          this.enterGameScreen();
-          return;
+        this.game = game;
+        this.enterGameScreen();
+        if (game.state.over) {
+          // Killed between the game-ending placement and the game-over commit:
+          // recover the full flow (continue offer, stats/streak commit, screen)
+          // instead of silently discarding the run's score (§7.5 kill-proofness).
+          void this.gameOverFlow();
         }
+        return;
       } catch {
         this.persist.clearRun();
       }
@@ -149,32 +165,66 @@ class App {
   }
 
   showHome(): void {
+    this.gameOverEpoch++;
     this.game = null;
     this.screens.setHudVisible(false);
     this.updateBanner('home');
     const repairEligible =
       streakBrokeYesterdayOnly(this.daily, this.todayKey()) &&
       this.director.canOfferStreakRepair(true);
+    if (repairEligible) {
+      // §9.6: rewarded_offered fires when the offer is PRESENTED, not when tapped
+      this.persist.appendEvent({ name: 'rewarded_offered', t: this.now(), data: { placement: 'streak_repair' } });
+    }
     this.screens.showHome(
       {
         best: this.stats.best,
         streak: currentStreak(this.daily, this.todayKey()),
-        dailyDoneToday: (this.daily.bestByDate[this.todayKey()] ?? 0) > 0 || this.daily.lastPlayedDate === this.todayKey(),
+        dailyDoneToday: this.dailyPlayedToday(),
         repairOffer: repairEligible ? this.daily.streak : null,
       },
       {
-        onPlay: () => this.newGame('normal'),
-        onDaily: () => this.newGame('daily'),
+        onPlay: () => this.resumeOrNew('normal'),
+        onDaily: () => this.resumeOrNew('daily'),
         onSettings: () => this.showSettings(),
         onStreakRepair: () => void this.streakRepairFlow(),
       },
     );
   }
 
-  newGame(mode: 'normal' | 'daily'): void {
-    const today = this.todayKey();
-    const seed = mode === 'daily' ? hashStringToSeed(today) : (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
-    this.game = mode === 'daily' ? Game.create(seed, 'daily', today) : Game.create(seed, 'normal');
+  private dailyPlayedToday(): boolean {
+    return this.daily.lastPlayedDate === this.todayKey();
+  }
+
+  /** Home buttons resume a matching in-progress run instead of discarding it (§6). */
+  private resumeOrNew(mode: 'normal' | 'daily'): void {
+    const saved = this.persist.loadRun();
+    if (saved !== null) {
+      try {
+        const game = Game.deserialize(saved);
+        const matchesToday = mode !== 'daily' || game.state.dailyDate === this.todayKey();
+        if (!game.state.over && game.state.mode === mode && matchesToday) {
+          this.game = game;
+          this.enterGameScreen();
+          return;
+        }
+      } catch {
+        this.persist.clearRun();
+      }
+    }
+    if (mode === 'daily' && this.dailyPlayedToday()) {
+      // §4.2: one seeded run per calendar day (the ad-gated second try is the only retry)
+      this.screens.toast(STR.daily.doneToday);
+      return;
+    }
+    this.newGame(mode);
+  }
+
+  newGame(mode: 'normal' | 'daily', dailyDateKey?: string): void {
+    this.gameOverEpoch++;
+    const dateKey = dailyDateKey ?? this.todayKey();
+    const seed = mode === 'daily' ? hashStringToSeed(dateKey) : (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
+    this.game = mode === 'daily' ? Game.create(seed, 'daily', dateKey) : Game.create(seed, 'normal');
     this.persist.saveRun(this.game.serialize());
     this.persist.appendEvent({ name: 'game_start', t: this.now(), data: { mode } });
     this.enterGameScreen();
@@ -184,12 +234,13 @@ class App {
     const game = this.game;
     if (!game) return;
     this.gameOverPending = false;
-    this.rewardedWatchedThisGameOver = false;
     this.displayedScore = game.state.score;
     this.screens.clear();
     this.screens.setHudVisible(true);
     this.updateBanner('game');
     this.renderer.fx.clearAll();
+    this.renderer.reset(); // a stale timeline from a previous run must never replay here
+    this.input.cancelActive();
     this.renderer.setBoard(game.state.board);
     this.syncTray();
     this.renderer.resize();
@@ -249,7 +300,13 @@ class App {
       afterPlacement[idx(col + dx, row + dy)] = color;
       placedCells.push({ col: col + dx, row: row + dy });
     }
-    this.renderer.startSteps(afterPlacement, result.steps, placedCells, result.allClearBonus > 0);
+    this.renderer.startSteps(
+      afterPlacement,
+      result.steps,
+      placedCells,
+      result.allClearBonus > 0,
+      result.streakMultiplier,
+    );
     this.audio.place();
     this.haptics.placement();
     // resolved state persists IMMEDIATELY — kill mid-animation restores post-cascade state (§7.5)
@@ -277,6 +334,7 @@ class App {
   private async gameOverFlow(): Promise<void> {
     const game = this.game;
     if (!game) return;
+    const epoch = ++this.gameOverEpoch; // invalidates any previous pending flow
     const score = game.state.score;
     this.rewardedWatchedThisGameOver = false;
 
@@ -295,11 +353,17 @@ class App {
           this.persist.saveRun(game.serialize());
           this.persist.appendEvent({ name: 'rewarded_completed', t: this.now(), data: { placement: 'continue' } });
           this.rewardedWatchedThisGameOver = true;
-          this.enterGameScreen();
-          this.renderer.startSteps(boardBefore, res.steps, [], false);
-          return; // run resumes
+          if (!game.state.over) {
+            this.enterGameScreen();
+            // reward clears award zero points → no "+N" flyers (§9.3.1)
+            this.renderer.startSteps(boardBefore, res.steps, [], false, 1, false);
+            return; // run resumes
+          }
+          // The reward cleared 2 rows but no tray piece fits even now — fall
+          // through to the normal game over (continueUsed blocks a second offer).
+        } else {
+          this.persist.appendEvent({ name: 'rewarded_dismissed', t: this.now(), data: { placement: 'continue' } });
         }
-        this.persist.appendEvent({ name: 'rewarded_dismissed', t: this.now(), data: { placement: 'continue' } });
       }
     }
 
@@ -309,8 +373,10 @@ class App {
     this.stats.maxChainEver = Math.max(this.stats.maxChainEver, game.state.maxChain);
     this.persist.saveStats(this.stats);
     const isDaily = game.state.mode === 'daily';
+    // a daily counts for the day it was SEEDED, even when finished after midnight
+    const dailyKey = game.state.dailyDate ?? this.todayKey();
     if (isDaily) {
-      this.daily = recordDailyPlayed(this.daily, this.todayKey(), score);
+      this.daily = recordDailyPlayed(this.daily, dailyKey, score);
       this.persist.saveDaily(this.daily);
       this.persist.appendEvent({
         name: 'daily_played',
@@ -331,31 +397,36 @@ class App {
     // 3) Game-over screen — score presentation first (§9.2).
     const maxChain = game.state.maxChain;
     this.updateBanner('gameover');
-    const showScreen = (): void =>
-      this.screens.showGameOver(
-        {
-          score,
-          best: this.stats.best,
-          isNewBest,
-          maxChain,
-          isDaily,
-          offerSecondTry: isDaily && this.director.canOfferDailySecondTry(),
-          showNoAdsPill: !this.director.state.removeAdsOwned,
-        },
-        {
-          onReplay: () => this.replay(),
-          onShare: () => void this.share(score, maxChain),
-          onHome: () => this.showHome(),
-          onRemoveAds: () => void this.purchaseRemoveAds(),
-          onDailySecondTry: () => void this.dailySecondTryFlow(),
-        },
-      );
-    showScreen();
+    const offerSecondTry = isDaily && this.director.canOfferDailySecondTry();
+    if (offerSecondTry) {
+      this.persist.appendEvent({ name: 'rewarded_offered', t: this.now(), data: { placement: 'daily_second_try' } });
+    }
+    this.screens.showGameOver(
+      {
+        score,
+        best: this.stats.best,
+        isNewBest,
+        maxChain,
+        isDaily,
+        offerSecondTry,
+        showNoAdsPill: !this.director.state.removeAdsOwned,
+      },
+      {
+        onReplay: () => this.newGame('normal'), // fresh run in < 1s (§2.7); a daily is once per day
+        onShare: () => void this.share(score, maxChain),
+        onHome: () => this.showHome(),
+        onRemoveAds: () => void this.purchaseRemoveAds(),
+        onDailySecondTry: () => void this.dailySecondTryFlow(dailyKey),
+      },
+    );
 
-    // 4) Interstitial AFTER the score presentation finishes (§9.2).
+    // 4) Interstitial AFTER the score presentation finishes (§9.2) — but only if the
+    // player is still on this game-over moment (epoch guard).
     await sleep(1400);
+    if (epoch !== this.gameOverEpoch || !document.querySelector('[data-screen="gameover"]')) return;
     if (this.director.shouldShowInterstitial(this.rewardedWatchedThisGameOver)) {
       const result = await this.safeAds.showInterstitial();
+      if (epoch !== this.gameOverEpoch) return;
       if (result === 'shown') {
         this.director.recordInterstitialShown();
         this.persist.saveMonetization(this.director.state);
@@ -371,16 +442,11 @@ class App {
           screenEl.appendChild(link);
         }
       } else {
-        this.persist.appendEvent({ name: 'interstitial_skipped', t: this.now() });
+        // a DUE interstitial the provider could not fill — the §9.2 'skipped' signal
+        this.persist.appendEvent({ name: 'interstitial_skipped', t: this.now(), data: { reason: result } });
       }
-    } else {
-      this.persist.appendEvent({ name: 'interstitial_skipped', t: this.now() });
     }
-  }
-
-  private replay(): void {
-    const mode = this.game?.state.mode ?? 'normal';
-    this.newGame(mode); // fresh run in < 1s (§2.7)
+    // not-due game overs log nothing: 'skipped' is a provider outcome, not a cadence miss
   }
 
   private async share(score: number, maxChain: number): Promise<void> {
@@ -390,8 +456,9 @@ class App {
         await navigator.share({ text });
         return;
       }
-    } catch {
-      /* fall through to clipboard */
+    } catch (err) {
+      // the player closed the share sheet on purpose — do not force the clipboard
+      if (err instanceof DOMException && err.name === 'AbortError') return;
     }
     try {
       await navigator.clipboard.writeText(text);
@@ -416,28 +483,30 @@ class App {
     this.showHome();
   }
 
-  private async dailySecondTryFlow(): Promise<void> {
+  private async dailySecondTryFlow(dailyKey: string): Promise<void> {
     if (!this.director.canOfferDailySecondTry()) return;
-    this.persist.appendEvent({ name: 'rewarded_offered', t: this.now(), data: { placement: 'daily_second_try' } });
+    this.gameOverEpoch++; // cancels the pending deferred interstitial for this game over
     const outcome = this.director.state.removeAdsOwned ? 'rewarded' : await this.safeAds.showRewarded();
     if (outcome === 'rewarded') {
       this.director.recordDailySecondTry();
       this.persist.saveMonetization(this.director.state);
       this.persist.appendEvent({ name: 'rewarded_completed', t: this.now(), data: { placement: 'daily_second_try' } });
-      this.rewardedWatchedThisGameOver = true;
-      this.newGame('daily'); // same date → same seed; best of two counts (§9.3.3)
+      this.newGame('daily', dailyKey); // the SAME seed, even across midnight; best of two counts (§9.3.3)
     } else {
       this.persist.appendEvent({ name: 'rewarded_dismissed', t: this.now(), data: { placement: 'daily_second_try' } });
     }
   }
 
   private async purchaseRemoveAds(): Promise<void> {
+    if (this.director.state.removeAdsOwned) return; // non-consumable: one-time only (§9.5)
     const result = await this.purchases.purchase('remove_ads');
     if (result === 'purchased') {
       this.director.setRemoveAdsOwned(true);
       this.persist.saveMonetization(this.director.state);
       this.persist.appendEvent({ name: 'remove_ads_purchased', t: this.now() });
       this.screens.toast(STR.ads.purchaseThanks);
+      document.querySelector('[data-testid="noads-pill"]')?.remove();
+      document.querySelector('[data-testid="post-ad-removeads"]')?.remove();
       this.updateBanner(this.game ? 'game' : 'home');
     }
   }
@@ -446,14 +515,13 @@ class App {
   private showPause(): void {
     this.updateBanner('pause');
     this.screens.showPause({
+      // §4.2: a daily is one seeded run per day — restarting it would be a free retry
+      canRestart: this.game?.state.mode !== 'daily',
       onResume: () => {
         this.screens.clear();
         this.updateBanner('game');
       },
-      onRestart: () => {
-        const mode = this.game?.state.mode ?? 'normal';
-        this.newGame(mode);
-      },
+      onRestart: () => this.newGame('normal'),
       onHome: () => this.showHome(),
       sound: () => this.settings.sound,
       haptics: () => this.settings.haptics,
@@ -512,6 +580,7 @@ class App {
     // in v1.1 never shifts gameplay layout (§9.4).
     this.bannerEl.classList.toggle('reserved', screen === 'game' || screen === 'pause');
     this.bannerEl.textContent = visible && DEBUG_MODE ? '· banner ad slot ·' : '';
+    this.renderer.resize(); // the slot changes the canvas height — relayout the board
   }
 
   // ---------------- frame loop ----------------

@@ -157,14 +157,14 @@ export class Screens {
     this.root.appendChild(s);
   }
 
-  showPause(cb: { onResume(): void; onRestart(): void; onHome(): void; sound(): boolean; haptics(): boolean; onToggleSound(): boolean; onToggleHaptics(): boolean }): void {
+  showPause(cb: { canRestart: boolean; onResume(): void; onRestart(): void; onHome(): void; sound(): boolean; haptics(): boolean; onToggleSound(): boolean; onToggleHaptics(): boolean }): void {
     this.clear();
     const s = el('div', 'screen');
     s.dataset['screen'] = 'pause';
     s.append(el('div', 'gameover-title', STR.pause));
     const menu = el('div', 'menu-col');
     menu.append(btn(STR.resume, 'btn-primary', cb.onResume, 'resume'));
-    menu.append(btn(STR.restart, '', cb.onRestart, 'restart'));
+    if (cb.canRestart) menu.append(btn(STR.restart, '', cb.onRestart, 'restart'));
     menu.append(btn(STR.home, 'btn-ghost', cb.onHome, 'pause-home'));
     s.append(menu);
     s.append(this.toggleRow(STR.sound, cb.sound(), cb.onToggleSound, 'sound-toggle'));
@@ -399,7 +399,7 @@ function tutorialArt(step: number): string {
     let cells = '';
     for (let i = 0; i < 8; i++) cells += block(8 + i * 21, 35, i < 6 ? '#51cf66' : 'rgba(154,163,199,0.25)', 18);
     return `<svg width="180" height="90" viewBox="0 0 180 90" xmlns="http://www.w3.org/2000/svg">${cells}
-      <text x="90" y="78" fill="#ffd43b" font-size="13" font-weight="700" text-anchor="middle" font-family="sans-serif">Fill the line!</text></svg>`;
+      <text x="90" y="78" fill="#ffd43b" font-size="14" font-weight="700" text-anchor="middle" font-family="sans-serif">Fill the line!</text></svg>`;
   }
   let art = '';
   for (let i = 0; i < 3; i++) art += block(60 + i * 24, 8, '#f783ac', 20);

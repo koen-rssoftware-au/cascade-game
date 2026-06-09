@@ -53,6 +53,7 @@ export const STR = {
     repairButton: 'Watch & repair',
     secondTry: 'Second try — watch an ad',
     secondTryHint: 'Best of two scores counts.',
+    doneToday: 'Daily done — come back tomorrow!',
   },
   continueOffer: {
     title: 'Keep going?',

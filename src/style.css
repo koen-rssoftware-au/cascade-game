@@ -49,6 +49,9 @@ body {
 
 #game-canvas {
   flex: 1;
+  /* without min-height:0 the canvas' width/height attributes impose an
+     aspect-ratio minimum that crushes the HUD and banner slot to nothing */
+  min-height: 0;
   width: 100%;
   touch-action: none;
   display: block;
@@ -57,6 +60,7 @@ body {
 /* ---------- HUD (game screen, DOM for touch targets) ---------- */
 #hud {
   height: var(--hud-h);
+  flex-shrink: 0;
   display: none;
   align-items: center;
   justify-content: space-between;
@@ -66,11 +70,15 @@ body {
 #hud.visible {
   display: flex;
 }
+/* §5.2: score top-center, best score small BESIDE it */
 .hud-score-wrap {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  text-align: center;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
   pointer-events: none;
 }
 #hud-score {
@@ -175,13 +183,12 @@ body {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+/* transform-only: an opacity-0 start would suppress First Contentful Paint entirely */
 @keyframes screen-in {
   from {
-    opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(14px) scale(0.985);
   }
   to {
-    opacity: 1;
     transform: none;
   }
 }
@@ -313,6 +320,12 @@ body {
   cursor: pointer;
   transition: background 0.15s ease-out;
 }
+/* invisible hit-area extension: 32px visual → 44px touch target (§6) */
+.toggle::before {
+  content: '';
+  position: absolute;
+  inset: -6px -8px;
+}
 .toggle::after {
   content: '';
   position: absolute;
@@ -334,6 +347,7 @@ body {
 /* ---------- Banner slot (reserved in v1, §9.4) ---------- */
 #banner-slot {
   height: 0;
+  flex-shrink: 0;
   overflow: hidden;
   display: flex;
   align-items: center;

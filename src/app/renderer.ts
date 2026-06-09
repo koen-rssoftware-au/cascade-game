@@ -118,11 +118,29 @@ export class Renderer {
     return this.timeline.length > 0 || this.sprites.length > 0;
   }
 
+  /** Drop the pending timeline WITHOUT firing callbacks — for entering a fresh run. */
+  reset(): void {
+    this.timeline = [];
+    this.sprites = [];
+    this.placedCells = [];
+    this.allClearPending = false;
+    this.drag = null;
+  }
+
   /**
    * Build the cosmetic timeline for one resolved placement (or continue reward).
    * `boardBeforeClear` = board right after the piece landed (before any clear).
+   * `streakMultiplier` scales the flown "+N" so it matches points actually awarded;
+   * `showPointFlyers=false` suppresses them (continue reward awards zero points).
    */
-  startSteps(boardBeforeClear: Board, steps: ChainStep[], placed: Array<{ col: number; row: number }>, allClear: boolean): void {
+  startSteps(
+    boardBeforeClear: Board,
+    steps: ChainStep[],
+    placed: Array<{ col: number; row: number }>,
+    allClear: boolean,
+    streakMultiplier = 1,
+    showPointFlyers = true,
+  ): void {
     this.fastForward(); // a new drop finishes whatever was left (spec §3.3 non-blocking)
     const now = performance.now();
     this.timelineStart = now;
@@ -152,9 +170,9 @@ export class Renderer {
             if (callout) this.fx.showCallout(callout.text, callout.priority, now2);
             // points fly from the cleared lines toward the score counter (top center)
             const first = stepRef.clearedCells[0];
-            if (first) {
+            if (first && showPointFlyers) {
               const ctr = this.cellCenter(first.col, first.row);
-              this.fx.fly(ctr.x, ctr.y, this.layout.w / 2, -30, stepRef.pointsAfterChain, now2);
+              this.fx.fly(ctr.x, ctr.y, this.layout.w / 2, -30, stepRef.pointsAfterChain * streakMultiplier, now2);
             }
             this.cb.onStepFx(stepRef);
           }
@@ -187,8 +205,10 @@ export class Renderer {
     }
     this.timeline.push({
       at: t,
-      run: (ff) => {
-        if (!ff && this.allClearPending) {
+      // the PERFECT! payoff fires even when fast-forwarded by an eager next drop —
+      // an all-clear must never be silently swallowed (it is the rarest jackpot)
+      run: () => {
+        if (this.allClearPending) {
           const now2 = performance.now();
           this.fx.showCallout(STR.callouts.perfect, 5, now2);
           this.cb.onAllClearFx();
