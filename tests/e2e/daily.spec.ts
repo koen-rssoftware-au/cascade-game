@@ -66,8 +66,8 @@ test('streak repair restores the streak after watching a rewarded ad', async ({ 
   await page.evaluate(() => (window as never as { __cascade: { goHome(): void } }).__cascade.goHome());
   await page.locator('[data-testid="streak-repair"]').click();
   await expect(page.locator('[data-testid="fake-ad-rewarded"]')).toBeVisible();
-  // rewarded fake ad auto-completes after the countdown
-  await expect(page.locator('[data-screen="home"]')).toBeVisible({ timeout: 5000 });
+  // rewarded fake ad auto-completes after the countdown; the repair is applied only then
+  await expect(page.locator('[data-testid="fake-ad-rewarded"]')).toHaveCount(0, { timeout: 6000 });
   const daily = await page.evaluate(() => JSON.parse(localStorage.getItem('cascade:daily.v1') ?? '{}'));
   expect(daily.lastPlayedDate).toBe('20260609'); // as if yesterday was played (§9.3.2)
   await expect(page.locator('[data-screen="home"]')).toContainText('6');
