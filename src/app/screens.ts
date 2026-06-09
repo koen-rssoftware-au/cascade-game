@@ -4,6 +4,7 @@ import { STR } from '../strings';
 const SVG = {
   pause:
     '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="4" width="4" height="16" rx="1.5"/><rect x="14" y="4" width="4" height="16" rx="1.5"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12.5 6H8.7l1.9-1.9a1 1 0 1 0-1.4-1.4l-3.8 3.8a1 1 0 0 0 0 1.4l3.8 3.8a1 1 0 0 0 1.4-1.4L8.7 8.4h3.8a5.1 5.1 0 1 1 0 10.2H8a1 1 0 1 0 0 2h4.5a7.1 7.1 0 1 0 0-14.2z"/></svg>',
   gear: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19.4 13a7.7 7.7 0 0 0 .1-1 7.7 7.7 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.7l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 0-.5.4L9 5.1a7.6 7.6 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.7L4.5 11a7.7 7.7 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.7l2 3.4c.1.2.4.3.6.2l2.5-1a7.6 7.6 0 0 0 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.2 0 .4-.2.5-.4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.7L19.4 13zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>',
   flame:
     '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="fill:#ffa94d"><path d="M13.5 0s.8 2.6.8 4.7c0 2-1.3 3.7-3.4 3.7C8.8 8.4 7.3 6.7 7.3 4.6l0-.4C5.3 6.6 4 9.6 4 12.9 4 17.4 7.6 21 12 21s8-3.6 8-8.1c0-5.5-2.6-10.3-6.5-12.9zM11.7 18c-1.8 0-3.3-1.4-3.3-3.2 0-1.7 1.1-2.8 2.9-3.2 1.8-.4 3.7-1.3 4.7-2.7.4 1.3.6 2.6.6 4 0 2.8-2.2 5.1-4.9 5.1z"/></svg>',
@@ -73,10 +74,17 @@ export class Screens {
     document.body.appendChild(this.toastEl);
   }
 
+  private undoBtn!: HTMLButtonElement;
+
   private buildHudSkeleton(): void {
     this.hud.innerHTML = '';
+    const left = el('div', 'hud-left');
     const pauseBtn = btn(SVG.pause, 'btn-icon', () => this.onPause?.(), 'pause');
     pauseBtn.setAttribute('aria-label', STR.pause);
+    this.undoBtn = btn(SVG.undo, 'btn-icon', () => this.onUndo?.(), 'undo');
+    this.undoBtn.setAttribute('aria-label', STR.undo);
+    this.undoBtn.disabled = true;
+    left.append(pauseBtn, this.undoBtn);
     const scoreWrap = el('div', 'hud-score-wrap');
     this.hudScore = el('div', '');
     this.hudScore.id = 'hud-score';
@@ -86,10 +94,15 @@ export class Screens {
     scoreWrap.append(this.hudScore, this.hudBest);
     this.hudStreak = el('div', 'idle');
     this.hudStreak.id = 'hud-streak';
-    this.hud.append(pauseBtn, scoreWrap, this.hudStreak);
+    this.hud.append(left, scoreWrap, this.hudStreak);
   }
 
   onPause: (() => void) | null = null;
+  onUndo: (() => void) | null = null;
+
+  setUndoEnabled(enabled: boolean): void {
+    this.undoBtn.disabled = !enabled;
+  }
 
   setHudVisible(v: boolean): void {
     this.hud.classList.toggle('visible', v);
@@ -275,6 +288,7 @@ export class Screens {
     onRemoveAds(): void;
     onRestore(): void;
     removeAdsOwned(): boolean;
+    stats(): { gamesPlayed: number; allClears: number; maxChainEver: number; linesCleared: number };
   }): void {
     this.clear();
     const s = el('div', 'screen screen-solid');
@@ -282,6 +296,22 @@ export class Screens {
     s.append(el('div', 'gameover-title', STR.settings));
     s.append(this.toggleRow(STR.sound, cb.sound(), cb.onToggleSound, 'sound-toggle'));
     s.append(this.toggleRow(STR.haptics, cb.haptics(), cb.onToggleHaptics, 'haptics-toggle'));
+    const lifetime = cb.stats();
+    const statsRow = el('div', 'stat-row stats-compact');
+    for (const [label, value] of [
+      [STR.stats.gamesPlayed, lifetime.gamesPlayed],
+      [STR.stats.allClears, lifetime.allClears],
+      [STR.stats.bestChain, lifetime.maxChainEver],
+      [STR.stats.linesCleared, lifetime.linesCleared],
+    ] as const) {
+      const stat = el('div', 'stat');
+      stat.append(
+        Object.assign(el('div', 'stat-value'), { textContent: value.toLocaleString('en-US') }),
+        Object.assign(el('div', 'stat-label'), { textContent: label }),
+      );
+      statsRow.append(stat);
+    }
+    s.append(statsRow);
     const menu = el('div', 'menu-col');
     const iapLabel = cb.removeAdsOwned() ? STR.ads.removeAdsOwned : STR.ads.removeAds;
     const iap = btn(iapLabel, 'btn-gold', cb.onRemoveAds, 'remove-ads');

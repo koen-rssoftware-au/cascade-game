@@ -3,8 +3,8 @@
 import '../style.css';
 import { Game } from '../engine/game';
 import { hashStringToSeed } from '../engine/rng';
-import { canPlace, anyLegalPlacement, findFullLines } from '../engine/board';
-import { pieceById } from '../engine/pieces';
+import { findFullLines } from '../engine/board';
+import { anyPlacementAnyRotation, shapeFor } from '../engine/pieces';
 import { idx, type Board, type ChainStep } from '../engine/types';
 import { DEFAULT_CONFIG, type MonetizationConfig } from '../monetization/config';
 import { MonetizationDirector, createInitialMonetizationState } from '../monetization/director';
@@ -61,6 +61,11 @@ class App {
   // try). A pending deferred interstitial compares epochs and silently cancels —
   // an ad must never appear after the player already moved on (§9 design law).
   private gameOverEpoch = 0;
+  // one-per-run undo (gameplay update): snapshot taken before every placement
+  private undoUsed = false;
+  private prevSnapshot: string | null = null;
+  private newBestCelebrated = false;
+  private lastInteractionAt = performance.now();
 
   constructor() {
     this.firstSessionEver = this.stats.firstSessionAt === null;
@@ -100,8 +105,12 @@ class App {
       canPlace: (i, col, row) => this.canPlaceTray(i, col, row),
       wouldClear: (i, col, row) => this.wouldClear(i, col, row),
       onDrop: (i, col, row) => this.dropPiece(i, col, row),
-      onPickup: () => this.audio.pickup(),
+      onPickup: () => {
+        this.touch();
+        this.audio.pickup();
+      },
       onCancelDrag: () => this.audio.illegal(),
+      onTapTraySlot: (i) => this.rotateSlot(i),
       enabled: () => this.game !== null && !this.game.state.over && !this.gameOverPending,
     });
 
@@ -111,6 +120,7 @@ class App {
       if (this.gameOverPending || this.game === null || this.game.state.over) return;
       this.showPause();
     };
+    this.screens.onUndo = (): void => this.undo();
 
     window.addEventListener('resize', () => this.renderer.resize());
     window.visualViewport?.addEventListener('resize', () => this.renderer.resize());
@@ -139,8 +149,11 @@ class App {
     const saved = this.persist.loadRun();
     if (saved !== null) {
       try {
-        const game = Game.deserialize(saved);
+        const game = Game.deserialize(saved.engine);
         this.game = game;
+        this.undoUsed = saved.undoUsed;
+        this.prevSnapshot = saved.prev;
+        this.newBestCelebrated = game.state.score > 0 && game.state.score >= this.stats.best;
         this.enterGameScreen();
         if (game.state.over) {
           // Killed between the game-ending placement and the game-over commit:
@@ -201,10 +214,13 @@ class App {
     const saved = this.persist.loadRun();
     if (saved !== null) {
       try {
-        const game = Game.deserialize(saved);
+        const game = Game.deserialize(saved.engine);
         const matchesToday = mode !== 'daily' || game.state.dailyDate === this.todayKey();
         if (!game.state.over && game.state.mode === mode && matchesToday) {
           this.game = game;
+          this.undoUsed = saved.undoUsed;
+          this.prevSnapshot = saved.prev;
+          this.newBestCelebrated = game.state.score > 0 && game.state.score >= this.stats.best;
           this.enterGameScreen();
           return;
         }
@@ -225,9 +241,19 @@ class App {
     const dateKey = dailyDateKey ?? this.todayKey();
     const seed = mode === 'daily' ? hashStringToSeed(dateKey) : (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
     this.game = mode === 'daily' ? Game.create(seed, 'daily', dateKey) : Game.create(seed, 'normal');
-    this.persist.saveRun(this.game.serialize());
+    this.undoUsed = false;
+    this.prevSnapshot = null;
+    this.newBestCelebrated = false;
+    this.saveRunState();
     this.persist.appendEvent({ name: 'game_start', t: this.now(), data: { mode } });
     this.enterGameScreen();
+  }
+
+  /** Persist the resolved run + undo bookkeeping in one place. */
+  private saveRunState(): void {
+    const game = this.game;
+    if (!game) return;
+    this.persist.saveRun({ engine: game.serialize(), undoUsed: this.undoUsed, prev: this.prevSnapshot });
   }
 
   private enterGameScreen(): void {
@@ -235,6 +261,7 @@ class App {
     if (!game) return;
     this.gameOverPending = false;
     this.displayedScore = game.state.score;
+    this.touch();
     this.screens.clear();
     this.screens.setHudVisible(true);
     this.updateBanner('game');
@@ -243,28 +270,31 @@ class App {
     this.input.cancelActive();
     this.renderer.setBoard(game.state.board);
     this.syncTray();
+    this.updateUndoButton();
     this.renderer.resize();
   }
 
   // ---------------- gameplay ----------------
-  private traySlotView(i: number): { piece: ReturnType<typeof pieceById>; color: number } | null {
+  private touch(): void {
+    this.lastInteractionAt = performance.now();
+    this.renderer.hintSlot = null;
+  }
+
+  private traySlotView(i: number): { piece: ReturnType<typeof shapeFor>; color: number } | null {
     const slot = this.game?.state.tray[i] ?? null;
     if (!slot) return null;
-    return { piece: pieceById(slot.pieceId), color: slot.color };
+    return { piece: shapeFor(slot.pieceId, slot.rot), color: slot.color };
   }
 
   private canPlaceTray(i: number, col: number, row: number): boolean {
-    const game = this.game;
-    const slot = game?.state.tray[i];
-    if (!game || !slot) return false;
-    return canPlace(game.state.board, pieceById(slot.pieceId), col, row);
+    return this.game?.canPlace(i, col, row) ?? false; // rotation-aware via the slot's rot
   }
 
   private wouldClear(i: number, col: number, row: number): { rows: number[]; cols: number[] } {
     const game = this.game;
     const slot = game?.state.tray[i];
     if (!game || !slot) return { rows: [], cols: [] };
-    const piece = pieceById(slot.pieceId);
+    const piece = shapeFor(slot.pieceId, slot.rot);
     const board: Board = game.state.board.slice();
     for (const [dx, dy] of piece.cells) board[idx(col + dx, row + dy)] = slot.color;
     return findFullLines(board);
@@ -276,10 +306,50 @@ class App {
     this.renderer.setTray(
       game.state.tray.map((slot) => {
         if (!slot) return null;
-        const piece = pieceById(slot.pieceId);
-        return { piece, color: slot.color, placeable: anyLegalPlacement(game.state.board, piece) };
+        return {
+          piece: shapeFor(slot.pieceId, slot.rot),
+          color: slot.color,
+          // dim only when NO rotation fits — the player can always tap-rotate
+          placeable: anyPlacementAnyRotation(game.state.board, slot.pieceId),
+        };
       }),
     );
+  }
+
+  /** Tap on a tray piece: rotate it a quarter turn (gameplay update). */
+  private rotateSlot(i: number): void {
+    const game = this.game;
+    if (!game || game.state.over || this.gameOverPending) return;
+    if (!game.state.tray[i]) return;
+    this.touch();
+    game.rotateTray(i);
+    this.saveRunState(); // rotation must survive refresh
+    this.syncTray();
+    this.renderer.spinSlot(i);
+    this.audio.rotate();
+    this.haptics.placement();
+  }
+
+  private undo(): void {
+    const game = this.game;
+    if (!game || game.state.over || this.gameOverPending) return;
+    if (this.undoUsed || this.prevSnapshot === null) return;
+    this.touch();
+    this.game = Game.deserialize(this.prevSnapshot);
+    this.undoUsed = true;
+    this.prevSnapshot = null;
+    this.saveRunState();
+    this.displayedScore = this.game.state.score;
+    this.renderer.fx.clearAll();
+    this.renderer.reset();
+    this.renderer.setBoard(this.game.state.board);
+    this.syncTray();
+    this.updateUndoButton();
+    this.audio.illegal(); // soft "rewind" cue
+  }
+
+  private updateUndoButton(): void {
+    this.screens.setUndoEnabled(!this.undoUsed && this.prevSnapshot !== null);
   }
 
   private dropPiece(i: number, col: number, row: number): void {
@@ -289,9 +359,11 @@ class App {
       this.audio.illegal();
       return;
     }
-    const piece = pieceById(slot.pieceId);
+    this.touch();
+    const piece = shapeFor(slot.pieceId, slot.rot);
     const color = slot.color;
     const before: Board = game.state.board.slice();
+    if (!this.undoUsed) this.prevSnapshot = game.serialize(); // pre-placement undo point
     const result = game.place(i, col, row);
     // board right after the piece landed, before any clear — animation start state
     const afterPlacement = before.slice();
@@ -310,8 +382,23 @@ class App {
     this.audio.place();
     this.haptics.placement();
     // resolved state persists IMMEDIATELY — kill mid-animation restores post-cascade state (§7.5)
-    this.persist.saveRun(game.serialize());
+    this.saveRunState();
     this.syncTray();
+    this.updateUndoButton();
+
+    // lifetime stats (settings screen)
+    if (result.steps.length > 0) {
+      for (const s of result.steps) this.stats.linesCleared += s.linesCleared;
+      if (result.allClearBonus > 0) this.stats.allClears += 1;
+      this.persist.saveStats(this.stats);
+    }
+    // one-time "New best!" moment while playing (not on the very first run ever)
+    if (!this.newBestCelebrated && this.stats.best > 0 && result.scoreAfter > this.stats.best) {
+      this.newBestCelebrated = true;
+      this.renderer.fx.showCallout(STR.newBest, 3, performance.now());
+      this.audio.newBest();
+    }
+
     if (result.gameOver) {
       this.gameOverPending = true; // flow continues in onTimelineDone
     }
@@ -350,7 +437,8 @@ class App {
           // Grant is applied and persisted synchronously BEFORE any UI continues (§9.3 kill-proof).
           const boardBefore: Board = game.state.board.slice();
           const res = game.applyContinueReward();
-          this.persist.saveRun(game.serialize());
+          this.prevSnapshot = null; // undo can never cross a continue grant
+          this.saveRunState();
           this.persist.appendEvent({ name: 'rewarded_completed', t: this.now(), data: { placement: 'continue' } });
           this.rewardedWatchedThisGameOver = true;
           if (!game.state.over) {
@@ -371,6 +459,7 @@ class App {
     const isNewBest = score > this.stats.best;
     this.stats.best = Math.max(this.stats.best, score);
     this.stats.maxChainEver = Math.max(this.stats.maxChainEver, game.state.maxChain);
+    this.stats.gamesPlayed += 1;
     this.persist.saveStats(this.stats);
     const isDaily = game.state.mode === 'daily';
     // a daily counts for the day it was SEEDED, even when finished after midnight
@@ -557,6 +646,12 @@ class App {
       onRemoveAds: () => void this.purchaseRemoveAds(),
       onRestore: () => void this.restorePurchases(),
       removeAdsOwned: () => this.director.state.removeAdsOwned,
+      stats: () => ({
+        gamesPlayed: this.stats.gamesPlayed,
+        allClears: this.stats.allClears,
+        maxChainEver: this.stats.maxChainEver,
+        linesCleared: this.stats.linesCleared,
+      }),
     });
   }
 
@@ -595,6 +690,20 @@ class App {
         this.displayedScore = Math.abs(diff) < 1 ? target : this.displayedScore + diff * Math.min(1, dt / 180);
       }
       this.screens.updateHud(this.displayedScore, this.stats.best, game.state.streak);
+      // idle hint (gameplay update): after 8s without input, pulse a placeable piece
+      if (
+        !game.state.over &&
+        !this.gameOverPending &&
+        !this.renderer.animating &&
+        t - this.lastInteractionAt > 8000
+      ) {
+        if (this.renderer.hintSlot === null) {
+          const idxHint = game.state.tray.findIndex(
+            (slot) => slot !== null && anyPlacementAnyRotation(game.state.board, slot.pieceId),
+          );
+          if (idxHint >= 0) this.renderer.hintSlot = idxHint;
+        }
+      }
       // NOTE: the renderer owns the visual board; it is only re-synced on state changes
       // (placements, continue reward, injectState) — never per frame, or the cascade
       // animation timeline would be clobbered mid-flight.
@@ -609,7 +718,9 @@ class App {
       app: this,
       injectState: (json: string): void => {
         this.game = Game.deserialize(json);
-        this.persist.saveRun(json);
+        this.undoUsed = false;
+        this.prevSnapshot = null;
+        this.saveRunState();
         this.enterGameScreen();
       },
       getState: (): string | null => this.game?.serialize() ?? null,

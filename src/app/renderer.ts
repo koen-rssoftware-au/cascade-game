@@ -73,6 +73,9 @@ export class Renderer {
   private placedCells: Array<{ col: number; row: number; born: number }> = [];
   drag: DragView | null = null;
   tray: Array<{ piece: PieceDef; color: number; placeable: boolean } | null> = [null, null, null];
+  /** Tray slot softly pulsing as an idle hint, or null. */
+  hintSlot: number | null = null;
+  private spin: { slot: number; start: number } | null = null;
   private cb: RendererCallbacks;
   private allClearPending = false;
 
@@ -228,6 +231,11 @@ export class Renderer {
 
   setTray(slots: Array<{ piece: PieceDef; color: number; placeable: boolean } | null>): void {
     this.tray = slots;
+  }
+
+  /** Quarter-turn spin animation after a tap-to-rotate. */
+  spinSlot(i: number): void {
+    this.spin = { slot: i, start: performance.now() };
   }
 
   frame(now: number, dt: number): void {
@@ -400,7 +408,7 @@ export class Renderer {
   }
 
   private drawTray(now: number): void {
-    void now;
+    const ctx = this.ctx;
     const rects = this.trayRects();
     for (let i = 0; i < 3; i++) {
       const slot = this.tray[i];
@@ -411,12 +419,28 @@ export class Renderer {
       const mini = Math.min((rect.w - 18) / slot.piece.w, (rect.h - 18) / slot.piece.h, this.layout.cell * 0.6);
       const pw = slot.piece.w * mini;
       const ph = slot.piece.h * mini;
-      const ox = rect.x + (rect.w - pw) / 2;
-      const oy = rect.y + (rect.h - ph) / 2;
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
       const alpha = slot.placeable ? 1 : 0.35;
-      for (const [dx, dy] of slot.piece.cells) {
-        this.drawBlock(ox + dx * mini, oy + dy * mini, mini, slot.color, alpha);
+
+      let scale = 1;
+      if (this.hintSlot === i && slot.placeable) {
+        scale = 1 + 0.05 * Math.sin(now / 170); // idle hint pulse
       }
+      let angle = 0;
+      if (this.spin && this.spin.slot === i) {
+        const t = Math.min((now - this.spin.start) / 130, 1);
+        if (t >= 1) this.spin = null;
+        else angle = -(1 - t) * (Math.PI / 2); // settle from −90° into place
+      }
+      ctx.save();
+      ctx.translate(cx, cy);
+      if (angle !== 0) ctx.rotate(angle);
+      if (scale !== 1) ctx.scale(scale, scale);
+      for (const [dx, dy] of slot.piece.cells) {
+        this.drawBlock(dx * mini - pw / 2, dy * mini - ph / 2, mini, slot.color, alpha);
+      }
+      ctx.restore();
     }
   }
 }

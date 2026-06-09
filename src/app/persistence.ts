@@ -21,10 +21,28 @@ export interface Stats {
   maxChainEver: number;
   tutorialDone: boolean;
   firstSessionAt: number | null; // epoch ms of very first launch
+  gamesPlayed: number;
+  allClears: number;
+  linesCleared: number;
+}
+
+/** Saved run: engine state + the undo bookkeeping that must survive refresh. */
+export interface SavedRun {
+  engine: string; // serialized GameState
+  undoUsed: boolean;
+  prev: string | null; // pre-placement snapshot for the one-per-run undo
 }
 
 const DEFAULT_SETTINGS: Settings = { sound: true, haptics: true };
-const DEFAULT_STATS: Stats = { best: 0, maxChainEver: 0, tutorialDone: false, firstSessionAt: null };
+const DEFAULT_STATS: Stats = {
+  best: 0,
+  maxChainEver: 0,
+  tutorialDone: false,
+  firstSessionAt: null,
+  gamesPlayed: 0,
+  allClears: 0,
+  linesCleared: 0,
+};
 
 function readJson<T>(storage: Storage, key: string, fallback: T): T {
   const raw = storage.get(key);
@@ -39,12 +57,28 @@ function readJson<T>(storage: Storage, key: string, fallback: T): T {
 export class Persistence {
   constructor(private storage: Storage) {}
 
-  // --- in-progress run (serialized engine state + run metadata) ---
-  saveRun(serialized: string): void {
-    this.storage.set(KEYS.run, serialized);
+  // --- in-progress run (engine state + undo bookkeeping) ---
+  saveRun(run: SavedRun): void {
+    this.storage.set(KEYS.run, JSON.stringify({ v: 2, ...run }));
   }
-  loadRun(): string | null {
-    return this.storage.get(KEYS.run);
+  loadRun(): SavedRun | null {
+    const raw = this.storage.get(KEYS.run);
+    if (raw === null) return null;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed['v'] === 2 && typeof parsed['engine'] === 'string') {
+        return {
+          engine: parsed['engine'],
+          undoUsed: parsed['undoUsed'] === true,
+          prev: typeof parsed['prev'] === 'string' ? parsed['prev'] : null,
+        };
+      }
+      // legacy format: the raw serialized GameState itself
+      if (Array.isArray(parsed['board'])) return { engine: raw, undoUsed: false, prev: null };
+      return null;
+    } catch {
+      return null;
+    }
   }
   clearRun(): void {
     this.storage.remove(KEYS.run);

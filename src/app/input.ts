@@ -9,12 +9,20 @@ export interface InputCallbacks {
   onDrop(trayIndex: number, col: number, row: number): void;
   onPickup(): void;
   onCancelDrag(): void;
+  /** A quick tap on a tray piece (no real drag) — rotate it. */
+  onTapTraySlot(trayIndex: number): void;
   enabled(): boolean;
 }
+
+const TAP_MAX_MS = 250;
+const TAP_MAX_DIST = 12;
 
 export class InputHandler {
   private activePointer: number | null = null;
   private trayIndex = -1;
+  private downAt = 0;
+  private downX = 0;
+  private downY = 0;
 
   constructor(private canvas: HTMLCanvasElement, private renderer: Renderer, private cb: InputCallbacks) {
     canvas.addEventListener('pointerdown', this.onDown, { passive: false });
@@ -42,6 +50,9 @@ export class InputHandler {
         e.preventDefault();
         this.activePointer = e.pointerId;
         this.trayIndex = i;
+        this.downAt = performance.now();
+        this.downX = x;
+        this.downY = y;
         try {
           this.canvas.setPointerCapture(e.pointerId);
         } catch {
@@ -99,6 +110,14 @@ export class InputHandler {
     if (!drag) return;
     const target = drag.target;
     this.renderer.drag = null;
+    const { x, y } = this.pos(e);
+    const isTap =
+      performance.now() - this.downAt < TAP_MAX_MS &&
+      Math.hypot(x - this.downX, y - this.downY) < TAP_MAX_DIST;
+    if (isTap) {
+      this.cb.onTapTraySlot(trayIndex); // tap = rotate (gameplay update)
+      return;
+    }
     if (target) {
       this.cb.onDrop(trayIndex, target.col, target.row);
     } else {

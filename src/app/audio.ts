@@ -86,6 +86,18 @@ export class GameAudio {
     this.tone(520, 0, 0.05, 'sine', 0.12);
   }
 
+  /** Crisp tick on tap-to-rotate. */
+  rotate(): void {
+    this.tone(740, 0, 0.045, 'sine', 0.14);
+    this.tone(988, 0.03, 0.05, 'sine', 0.08);
+  }
+
+  /** Two rising notes when the run passes the all-time best. */
+  newBest(): void {
+    this.tone(659.25, 0, 0.16, 'sine', 0.22);
+    this.tone(987.77, 0.1, 0.24, 'sine', 0.24);
+  }
+
   illegal(): void {
     this.tone(160, 0, 0.09, 'triangle', 0.15, 120);
   }
