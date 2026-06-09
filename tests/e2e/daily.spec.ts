@@ -46,6 +46,17 @@ test('streak increments per day and resets after a skipped day', async ({ page }
   const daily = await page.evaluate(() => JSON.parse(localStorage.getItem('cascade:daily.v1') ?? '{}'));
   expect(daily.streak).toBe(2);
 
+  // same-day replay is blocked (§4.2: one seeded run per day) → no run starts,
+  // a toast explains, and the streak cannot double-increment
+  await page.evaluate(() => (window as never as { __cascade: { goHome(): void } }).__cascade.goHome());
+  await page.locator('[data-testid="daily"]').click();
+  await expect(page.locator('#toast')).toHaveClass(/show/);
+  await page.waitForTimeout(1000);
+  await expect(page.locator('#hud')).not.toBeVisible();
+  await expect(page.locator('[data-screen="home"]')).toBeVisible();
+  const dailyReplay = await page.evaluate(() => JSON.parse(localStorage.getItem('cascade:daily.v1') ?? '{}'));
+  expect(dailyReplay.streak).toBe(2);
+
   // skip 20260612 → streak shows 0 and repair offer appears (broke yesterday only)
   await setToday(page, '20260613');
   await page.evaluate(() => (window as never as { __cascade: { goHome(): void } }).__cascade.goHome());

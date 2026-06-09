@@ -185,3 +185,94 @@ describe('monetization soak extension (spec §9.7.6)', () => {
     );
   });
 });
+
+describe('monetization soak attached to the real random-agent soak (spec §9.7.6)', () => {
+  const ATTACHED_GAMES = 2_000;
+
+  it(
+    `plays ${ATTACHED_GAMES} real games with the director attached; grace/cadence/cooldown/cap hold`,
+    { timeout: 120_000 },
+    () => {
+      const cfg = DEFAULT_CONFIG;
+      // Fake clock advanced by an IRREGULAR per-game amount derived from the game
+      // itself (10s overhead + 1.5s per placement) — unlike the fixed-step soak
+      // above, cooldown and local-day boundaries land at uneven offsets.
+      let nowMs = new Date(2026, 5, 10, 9, 0, 0).getTime();
+      const director = new MonetizationDirector(cfg, createInitialMonetizationState(), () => nowMs);
+
+      // Shadow model recomputed from the config alone (same approach as above).
+      let totalGames = 0;
+      let oversSinceShown = 0;
+      let lastShownAt: number | null = null;
+      const shownPerDay = new Map<string, number>();
+      const shownEvents: Array<{ index: number; at: number; oversBefore: number }> = [];
+
+      for (let seed = 1; seed <= ATTACHED_GAMES; seed++) {
+        const game = Game.create((seed + 0x5eed_0000) >>> 0, 'normal');
+        const agent = new RandomAgent(createRng((seed ^ 0x51f15eed) >>> 0));
+        const played = playGame(game, agent);
+        if (played.capHit || !game.state.over) {
+          throw new Error(`Game did not terminate cleanly at seed ${seed}`);
+        }
+
+        nowMs += 10_000 + played.placements * 1_500;
+        director.recordGameOver();
+        totalGames++;
+        oversSinceShown++;
+
+        const today = localDateString(nowMs);
+        const expected =
+          totalGames > cfg.gracePeriodGames &&
+          oversSinceShown >= cfg.gameOversPerInterstitial &&
+          (lastShownAt === null || nowMs - lastShownAt >= cfg.interstitialCooldownMs) &&
+          (shownPerDay.get(today) ?? 0) < cfg.interstitialDailyCap;
+
+        const decision = director.shouldShowInterstitial(false);
+        if (decision !== expected) {
+          throw new Error(
+            `Decision mismatch at game ${seed}: director=${decision} expected=${expected} ` +
+              `(totalGames=${totalGames}, oversSinceShown=${oversSinceShown}, ` +
+              `placements=${played.placements}, ` +
+              `sinceLastMs=${lastShownAt === null ? 'n/a' : nowMs - lastShownAt}, ` +
+              `shownToday=${shownPerDay.get(today) ?? 0})`,
+          );
+        }
+
+        if (decision) {
+          shownEvents.push({ index: seed, at: nowMs, oversBefore: oversSinceShown });
+          director.recordInterstitialShown();
+          oversSinceShown = 0;
+          lastShownAt = nowMs;
+          shownPerDay.set(today, (shownPerDay.get(today) ?? 0) + 1);
+        }
+      }
+
+      // Direct invariant scan over the shown events (belt and braces).
+      expect(shownEvents.length).toBeGreaterThan(0);
+      for (let k = 0; k < shownEvents.length; k++) {
+        const ev = shownEvents[k];
+        if (!ev) throw new Error('unreachable: shownEvents index in range');
+        // Never during the grace period (first N games ever).
+        expect(ev.index).toBeGreaterThan(cfg.gracePeriodGames);
+        // Cadence: at least N game overs since the previous interstitial.
+        expect(ev.oversBefore).toBeGreaterThanOrEqual(cfg.gameOversPerInterstitial);
+        // Gaps between consecutive shows >= cooldown.
+        if (k > 0) {
+          const prev = shownEvents[k - 1];
+          if (!prev) throw new Error('unreachable: prev index in range');
+          expect(ev.at - prev.at).toBeGreaterThanOrEqual(cfg.interstitialCooldownMs);
+        }
+      }
+      // Per-local-day count never exceeds the cap.
+      for (const count of shownPerDay.values()) {
+        expect(count).toBeLessThanOrEqual(cfg.interstitialDailyCap);
+      }
+
+      console.log(
+        `[attached soak] games: ${ATTACHED_GAMES} | interstitials shown: ${shownEvents.length} | ` +
+          `days simulated: ${shownPerDay.size} | ` +
+          `sim duration: ${((nowMs - new Date(2026, 5, 10, 9, 0, 0).getTime()) / 3_600_000).toFixed(1)}h`,
+      );
+    },
+  );
+});
