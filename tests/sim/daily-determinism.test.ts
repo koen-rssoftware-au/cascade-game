@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game } from '../../src/engine/game';
 import { createRng, hashStringToSeed } from '../../src/engine/rng';
-import { RandomAgent, playGame } from '../../src/sim/agents';
+import { RandomAgent, applyMove, playGame } from '../../src/sim/agents';
 import type { Move } from '../../src/sim/agents';
 
 const DAILY_DATE = '20260610';
@@ -51,7 +51,7 @@ describe('daily challenge determinism (spec §7.2)', () => {
     const recorded = runDaily();
     const game = Game.create(hashStringToSeed(DAILY_DATE), 'daily', DAILY_DATE);
     for (const move of recorded.moves) {
-      game.place(move.trayIndex, move.col, move.row);
+      applyMove(game, move);
     }
     const state = game.state;
     expect(state.score).toBe(recorded.score);

@@ -111,7 +111,7 @@ describe('persistence round trip (spec §7.1.8)', () => {
   it('continueUsed, streak, maxChain and over flags round trip', () => {
     const state: GameState = {
       board: emptyBoard(),
-      tray: [{ pieceId: 'P4', color: 7 }, null, { pieceId: 'P11', color: 2 }],
+      tray: [{ pieceId: 'P4', color: 7, rot: 0 }, null, { pieceId: 'P11', color: 2, rot: 0 }],
       score: 4820,
       streak: 3,
       maxChain: 2,

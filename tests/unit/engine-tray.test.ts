@@ -45,7 +45,7 @@ function refDrawTray(board: Board, rng: Rng): TraySlot[] {
       r -= w;
     }
     const color = 1 + Math.floor(rng.next() * 8);
-    out.push({ pieceId: `P${pick + 1}`, color });
+    out.push({ pieceId: `P${pick + 1}`, color, rot: 0 });
   }
   return out;
 }

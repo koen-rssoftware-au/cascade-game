@@ -13,9 +13,13 @@ export interface PieceDef {
   w: number;
   h: number;
 }
+/** Quarter-turn rotation count, clockwise. 0 = catalog orientation. */
+export type Rot = 0 | 1 | 2 | 3;
+
 export interface TraySlot {
   pieceId: string;
   color: number;
+  rot: Rot;
 }
 
 export interface FallMove {

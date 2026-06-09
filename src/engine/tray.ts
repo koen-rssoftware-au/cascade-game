@@ -6,8 +6,7 @@
 // WITHOUT consuming RNG: catalog sorted by (cell count DESC, catalog index ASC),
 // first piece with a legal placement; the replacement KEEPS the color already
 // drawn for slot 2. If even P1 has no legal placement, the drawn tray is kept.
-import { PIECES, getPiece } from './pieces';
-import { anyLegalPlacement } from './board';
+import { PIECES, anyPlacementAnyRotation } from './pieces';
 import { COLS, ROWS } from './types';
 import type { Board, TraySlot } from './types';
 import type { Rng } from './rng';
@@ -42,19 +41,20 @@ export function generateTray(board: Board, rng: Rng): TraySlot[] {
     const piece = PIECES[pick];
     if (!piece) throw new Error(`Catalog index out of range: ${pick}`);
     const color = 1 + Math.floor(rng.next() * 8);
-    slots.push({ pieceId: piece.id, color });
+    slots.push({ pieceId: piece.id, color, rot: 0 });
   }
 
-  // Survivability guarantee (§2.6.4) — runs at most once per tray.
-  const anyPlaceable = slots.some((slot) => anyLegalPlacement(board, getPiece(slot.pieceId)));
+  // Survivability guarantee (§2.6.4) — runs at most once per tray. With the
+  // rotation update a piece counts as placeable when ANY of its rotations fits.
+  const anyPlaceable = slots.some((slot) => anyPlacementAnyRotation(board, slot.pieceId));
   if (!anyPlaceable) {
     const candidates = PIECES.map((p, i) => ({ p, i })).sort(
       (a, b) => b.p.cells.length - a.p.cells.length || a.i - b.i,
     );
     for (const { p } of candidates) {
-      if (anyLegalPlacement(board, p)) {
+      if (anyPlacementAnyRotation(board, p.id)) {
         const drawn = slots[2];
-        if (drawn) slots[2] = { pieceId: p.id, color: drawn.color };
+        if (drawn) slots[2] = { pieceId: p.id, color: drawn.color, rot: 0 };
         break;
       }
     }

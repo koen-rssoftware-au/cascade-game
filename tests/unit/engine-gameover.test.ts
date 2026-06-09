@@ -23,7 +23,7 @@ function checkerboard(): Board {
 }
 
 function slot(pieceId: string, color = 2): TraySlot {
-  return { pieceId, color };
+  return { pieceId, color, rot: 0 };
 }
 
 function gameFrom(

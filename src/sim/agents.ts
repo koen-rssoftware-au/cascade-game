@@ -1,20 +1,22 @@
 // Headless simulation agents + harness (spec §7.2, plan Task 3).
 //
-// Both agents enumerate ALL legal (trayIndex, col, row) triples in the same
-// deterministic order — trayIndex asc, then row asc, then col asc — so runs are
-// reproducible and the greedy tie-break "first in enumeration order" is well
-// defined. Agents only READ the game (state snapshots + canPlace); they never
+// Both agents enumerate ALL legal (trayIndex, rot, col, row) tuples in the same
+// deterministic order — trayIndex asc, unique-rot asc, row asc, col asc — so runs
+// are reproducible and the greedy tie-break "first in enumeration order" is well
+// defined. Agents only READ the game (state snapshots + board math); they never
 // mutate it while choosing.
 import { resolveCascade } from '../engine/game';
 import type { Game } from '../engine/game';
-import { getPiece } from '../engine/pieces';
+import { shapeFor, uniqueRotations } from '../engine/pieces';
+import { canPlace } from '../engine/board';
 import type { Rng } from '../engine/rng';
 import { COLS, ROWS, idx } from '../engine/types';
-import type { Board, PlacementResult, TraySlot } from '../engine/types';
+import type { Board, PlacementResult, Rot, TraySlot } from '../engine/types';
 
-/** One placement: which tray slot goes where (top-left anchor of the piece). */
+/** One placement: which tray slot goes where, in which rotation. */
 export interface Move {
   trayIndex: number;
+  rot: Rot;
   col: number;
   row: number;
 }
@@ -25,17 +27,22 @@ export interface Agent {
 }
 
 /**
- * All legal (trayIndex, col, row) triples, ordered trayIndex asc, row asc,
- * col asc. Consumed (null) slots are skipped. Read-only on the game.
+ * All legal (trayIndex, rot, col, row) tuples, ordered trayIndex asc, unique
+ * rotation asc, row asc, col asc. Consumed (null) slots are skipped. Only
+ * distinct shapes are enumerated (a square never repeats four times).
  */
 export function enumerateLegalMoves(game: Game): Move[] {
   const moves: Move[] = [];
-  const tray = game.state.tray;
+  const { board, tray } = game.state;
   for (let trayIndex = 0; trayIndex < tray.length; trayIndex++) {
-    if (!tray[trayIndex]) continue;
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLS; col++) {
-        if (game.canPlace(trayIndex, col, row)) moves.push({ trayIndex, col, row });
+    const slot = tray[trayIndex];
+    if (!slot) continue;
+    for (const rot of uniqueRotations(slot.pieceId)) {
+      const shape = shapeFor(slot.pieceId, rot);
+      for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+          if (canPlace(board, shape, col, row)) moves.push({ trayIndex, rot, col, row });
+        }
       }
     }
   }
@@ -71,7 +78,7 @@ export function evaluatePlacement(
 ): { cellsCleared: number; totalPoints: number } {
   const slot = tray[move.trayIndex];
   if (!slot) throw new Error(`evaluatePlacement: tray slot ${move.trayIndex} holds no piece`);
-  const piece = getPiece(slot.pieceId);
+  const piece = shapeFor(slot.pieceId, move.rot);
 
   const placed = board.slice();
   for (const [dc, dr] of piece.cells) placed[idx(move.col + dc, move.row + dr)] = slot.color;
@@ -115,6 +122,16 @@ export class GreedyAgent implements Agent {
   }
 }
 
+/** Rotate the slot to the move's rotation, then place — the one way agents act. */
+export function applyMove(game: Game, move: Move): PlacementResult {
+  let guard = 0;
+  while (game.state.tray[move.trayIndex]?.rot !== move.rot) {
+    game.rotateTray(move.trayIndex);
+    if (++guard > 4) throw new Error('rotateTray failed to reach the requested rotation');
+  }
+  return game.place(move.trayIndex, move.col, move.row);
+}
+
 /** Hard per-game safety cap for harness runs (soak asserts it is never hit). */
 export const SAFETY_CAP = 10_000;
 
@@ -151,7 +168,7 @@ export function playGame(
     if (!move) {
       throw new Error('Agent found no legal move although the game is not over (§2.7 violation)');
     }
-    const result = game.place(move.trayIndex, move.col, move.row);
+    const result = applyMove(game, move);
     moves.push(move);
     if (onPlacement) onPlacement(result, move, game);
   }

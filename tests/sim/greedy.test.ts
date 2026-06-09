@@ -8,7 +8,7 @@
 //   games per agent on the same seeds.
 import { describe, expect, it } from 'vitest';
 import { Game } from '../../src/engine/game';
-import { getPiece } from '../../src/engine/pieces';
+import { shapeFor, uniqueRotations } from '../../src/engine/pieces';
 import { createRng } from '../../src/engine/rng';
 import type { Rng } from '../../src/engine/rng';
 import { COLS, ROWS, idx } from '../../src/engine/types';
@@ -16,6 +16,7 @@ import type { Board, GameState, TraySlot } from '../../src/engine/types';
 import {
   GreedyAgent,
   RandomAgent,
+  applyMove,
   enumerateLegalMoves,
   evaluatePlacement,
   playGame,
@@ -85,25 +86,27 @@ describe('enumerateLegalMoves', () => {
     let expected = 0;
     for (const slot of game.state.tray) {
       if (!slot) continue;
-      const p = getPiece(slot.pieceId);
-      expected += (COLS - p.w + 1) * (ROWS - p.h + 1);
+      for (const rot of uniqueRotations(slot.pieceId)) {
+        const p = shapeFor(slot.pieceId, rot);
+        expected += (COLS - p.w + 1) * (ROWS - p.h + 1);
+      }
     }
     expect(moves.length).toBe(expected);
   });
 
-  it('orders triples by trayIndex asc, then row asc, then col asc', () => {
+  it('orders tuples by trayIndex asc, unique-rot asc, row asc, col asc', () => {
     const game = Game.create(7, 'normal');
     const moves = enumerateLegalMoves(game);
     expect(moves.length).toBeGreaterThan(1);
     for (let i = 1; i < moves.length; i++) {
       const a = at(moves, i - 1);
       const b = at(moves, i);
-      const aKey = a.trayIndex * 10_000 + a.row * 100 + a.col;
-      const bKey = b.trayIndex * 10_000 + b.row * 100 + b.col;
+      const aKey = a.trayIndex * 1_000_000 + a.rot * 10_000 + a.row * 100 + a.col;
+      const bKey = b.trayIndex * 1_000_000 + b.rot * 10_000 + b.row * 100 + b.col;
       expect(bKey).toBeGreaterThan(aKey);
     }
     // On an empty board the very first legal triple is slot 0 at (col 0, row 0).
-    expect(at(moves, 0)).toEqual({ trayIndex: 0, col: 0, row: 0 });
+    expect(at(moves, 0)).toEqual({ trayIndex: 0, rot: 0, col: 0, row: 0 });
   });
 
   it('skips consumed (null) tray slots and respects filled cells', () => {
@@ -112,14 +115,14 @@ describe('enumerateLegalMoves', () => {
     const board: Board = new Array<number>(COLS * ROWS).fill(2);
     board[idx(7, 7)] = 0;
     const game = craftGame(board, [
-      { pieceId: 'P1', color: 1 },
+      { pieceId: 'P1', color: 1, rot: 0 },
       null,
-      { pieceId: 'P1', color: 2 },
+      { pieceId: 'P1', color: 2, rot: 0 },
     ]);
     const moves = enumerateLegalMoves(game);
     expect(moves).toEqual([
-      { trayIndex: 0, col: 7, row: 7 },
-      { trayIndex: 2, col: 7, row: 7 },
+      { trayIndex: 0, rot: 0, col: 7, row: 7 },
+      { trayIndex: 2, rot: 0, col: 7, row: 7 },
     ]);
   });
 });
@@ -153,7 +156,7 @@ describe('RandomAgent', () => {
   it('returns null when no legal move exists', () => {
     const board: Board = new Array<number>(COLS * ROWS).fill(3);
     board[idx(0, 0)] = 0; // one free cell, but tray needs 2 cells
-    const game = craftGame(board, [{ pieceId: 'P2', color: 1 }, null, null]);
+    const game = craftGame(board, [{ pieceId: 'P2', color: 1, rot: 0 }, null, null]);
     expect(new RandomAgent(sequenceRng([0.5])).chooseMove(game)).toBeNull();
   });
 });
@@ -163,12 +166,12 @@ describe('GreedyAgent', () => {
     // Row 7 filled cols 0..5; P2 at (6,7) completes the row → 8 cells cleared.
     // P1 can never clear anything this turn.
     const game = craftGame(boardWithRow7Filled(5), [
-      { pieceId: 'P1', color: 1 },
-      { pieceId: 'P2', color: 2 },
+      { pieceId: 'P1', color: 1, rot: 0 },
+      { pieceId: 'P2', color: 2, rot: 0 },
       null,
     ]);
     const move = new GreedyAgent().chooseMove(game);
-    expect(move).toEqual({ trayIndex: 1, col: 6, row: 7 });
+    expect(move).toEqual({ trayIndex: 1, rot: 0, col: 6, row: 7 });
   });
 
   it('breaks cells-cleared ties by max totalPoints (placement points differ: 13 vs 11, spec §2.5)', () => {
@@ -179,23 +182,23 @@ describe('GreedyAgent', () => {
     const board = boardWithRow7Filled(6);
     board[idx(0, 0)] = 4;
     const game = craftGame(board, [
-      { pieceId: 'P1', color: 1 },
-      { pieceId: 'P5', color: 2 },
+      { pieceId: 'P1', color: 1, rot: 0 },
+      { pieceId: 'P5', color: 2, rot: 0 },
       null,
     ]);
     const move = new GreedyAgent().chooseMove(game);
-    expect(move).toEqual({ trayIndex: 1, col: 7, row: 5 });
+    expect(move).toEqual({ trayIndex: 1, rot: 0, col: 7, row: 5 });
   });
 
   it('breaks full ties by first in enumeration order (lower trayIndex wins)', () => {
     // Two identical P1s: both clear row 7 at (7,7) with identical points.
     const game = craftGame(boardWithRow7Filled(6), [
-      { pieceId: 'P1', color: 1 },
-      { pieceId: 'P1', color: 2 },
+      { pieceId: 'P1', color: 1, rot: 0 },
+      { pieceId: 'P1', color: 2, rot: 0 },
       null,
     ]);
     const move = new GreedyAgent().chooseMove(game);
-    expect(move).toEqual({ trayIndex: 0, col: 7, row: 7 });
+    expect(move).toEqual({ trayIndex: 0, rot: 0, col: 7, row: 7 });
   });
 
   it('never mutates the real game while evaluating', () => {
@@ -217,10 +220,10 @@ describe('GreedyAgent', () => {
         const st = game.state;
         const evaluated = evaluatePlacement(st.board, st.tray, st.streak, move);
         const clone = Game.deserialize(game.serialize());
-        const actual = clone.place(move.trayIndex, move.col, move.row);
+        const actual = applyMove(clone, move);
         expect(evaluated.totalPoints).toBe(actual.totalPoints);
         expect(evaluated.cellsCleared).toBe(cellsClearedOf(actual.steps));
-        game.place(move.trayIndex, move.col, move.row);
+        applyMove(game, move);
       }
     }
   });
@@ -247,6 +250,6 @@ describe('greedy-agent sanity (spec §7.2)', () => {
   });
 });
 
-// Keep TypeScript aware that Move is the canonical triple shape used above.
-const _moveShapeCheck: Move = { trayIndex: 0, col: 0, row: 0 };
+// Keep TypeScript aware that Move is the canonical tuple shape used above.
+const _moveShapeCheck: Move = { trayIndex: 0, rot: 0, col: 0, row: 0 };
 void _moveShapeCheck;

@@ -9,17 +9,17 @@ import type {
   GameMode,
   GameState,
   PlacementResult,
+  Rot,
   TraySlot,
 } from './types';
 import {
-  anyLegalPlacement,
   applyGravity,
   canPlace as canPlaceOnBoard,
   clearLines,
   emptyBoard,
   findFullLines,
 } from './board';
-import { getPiece } from './pieces';
+import { anyPlacementAnyRotation, shapeFor } from './pieces';
 import { createRng } from './rng';
 import type { Rng } from './rng';
 import { generateTray } from './tray';
@@ -122,14 +122,26 @@ export class Game {
     if (this.st.over) return false;
     const slot = this.st.tray[trayIndex];
     if (!slot) return false;
-    return canPlaceOnBoard(this.st.board, getPiece(slot.pieceId), col, row);
+    return canPlaceOnBoard(this.st.board, shapeFor(slot.pieceId, slot.rot), col, row);
+  }
+
+  /**
+   * Rotate a tray piece one clockwise quarter turn (gameplay update; free,
+   * unlimited, no RNG, no score effect). Returns the new rotation.
+   */
+  rotateTray(trayIndex: number): Rot {
+    if (this.st.over) throw new Error('Game is over — no rotations allowed');
+    const slot = this.st.tray[trayIndex];
+    if (!slot) throw new Error(`Tray slot ${trayIndex} holds no piece`);
+    slot.rot = ((slot.rot + 1) % 4) as Rot;
+    return slot.rot;
   }
 
   place(trayIndex: number, col: number, row: number): PlacementResult {
     if (this.st.over) throw new Error('Game is over — no further placements allowed');
     const slot = this.st.tray[trayIndex];
     if (!slot) throw new Error(`Tray slot ${trayIndex} holds no piece`);
-    const piece = getPiece(slot.pieceId);
+    const piece = shapeFor(slot.pieceId, slot.rot);
     if (!canPlaceOnBoard(this.st.board, piece, col, row)) {
       throw new Error(`Illegal placement: ${piece.id} at (${col},${row})`);
     }
@@ -242,10 +254,13 @@ export class Game {
     return new Game(state, rng);
   }
 
-  /** Spec §2.7: any non-null tray piece with any legal placement keeps the run alive. */
+  /**
+   * Spec §2.7, rotation-aware: a tray piece keeps the run alive when ANY of its
+   * rotations has a legal placement (the player can always rotate for free).
+   */
   private hasAnyMove(): boolean {
     return this.st.tray.some(
-      (slot) => slot !== null && anyLegalPlacement(this.st.board, getPiece(slot.pieceId)),
+      (slot) => slot !== null && anyPlacementAnyRotation(this.st.board, slot.pieceId),
     );
   }
 }

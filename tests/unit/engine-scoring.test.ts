@@ -17,7 +17,7 @@ function b(rows: string[]): Board {
 const E8 = '........';
 
 function slot(pieceId: string, color = 1): TraySlot {
-  return { pieceId, color };
+  return { pieceId, color, rot: 0 };
 }
 
 /** Craft a mid-run game from an exact state (board/tray/counters fully pinned). */

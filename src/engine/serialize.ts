@@ -3,7 +3,7 @@
 // canonical key order, so engine-produced JSON re-serializes byte-identically.
 import { COLS, ROWS } from './types';
 import { getPiece } from './pieces';
-import type { Board, GameMode, GameState, TraySlot } from './types';
+import type { Board, GameMode, GameState, Rot, TraySlot } from './types';
 
 export function serializeGameState(state: GameState): string {
   return JSON.stringify(state);
@@ -48,7 +48,12 @@ function asTray(v: unknown): (TraySlot | null)[] {
     if (typeof color !== 'number' || !Number.isInteger(color) || color < 1 || color > 8) {
       fail('tray slot color must be an integer 1..8');
     }
-    return { pieceId, color };
+    // rot is absent in pre-rotation saves — default 0 keeps old runs loadable
+    const rot = rec['rot'] ?? 0;
+    if (rot !== 0 && rot !== 1 && rot !== 2 && rot !== 3) {
+      fail('tray slot rot must be 0..3');
+    }
+    return { pieceId, color, rot: rot as Rot };
   });
 }
 
