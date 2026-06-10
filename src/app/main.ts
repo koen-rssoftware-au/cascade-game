@@ -11,8 +11,9 @@ import { MonetizationDirector, createInitialMonetizationState } from '../monetiz
 import { MockAdProvider, SafeAdProvider } from '../monetization/adProvider';
 import { MockPurchases } from '../monetization/purchases';
 import { UiAdProvider } from './adUi';
-import { LocalStorageImpl } from './storage';
+import { HydratedNativeStorage, LocalStorageImpl, type Storage } from './storage';
 import { Persistence } from './persistence';
+import { initNativeChrome } from './native';
 import { GameAudio } from './audio';
 import { Haptics } from './haptics';
 import { Renderer } from './renderer';
@@ -33,11 +34,11 @@ const TEST_MODE = params.get('test') === '1';
 const DEBUG_MODE = params.get('debug') === '1';
 
 class App {
-  storage = new LocalStorageImpl();
-  persist = new Persistence(this.storage);
-  settings = this.persist.loadSettings();
-  stats = this.persist.loadStats();
-  daily = this.persist.loadDaily();
+  storage: Storage;
+  persist: Persistence;
+  settings: ReturnType<Persistence['loadSettings']>;
+  stats: ReturnType<Persistence['loadStats']>;
+  daily: ReturnType<Persistence['loadDaily']>;
   audio = new GameAudio();
   haptics = new Haptics();
   screens = new Screens();
@@ -67,7 +68,12 @@ class App {
   private newBestCelebrated = false;
   private lastInteractionAt = performance.now();
 
-  constructor() {
+  constructor(storage: Storage) {
+    this.storage = storage;
+    this.persist = new Persistence(storage);
+    this.settings = this.persist.loadSettings();
+    this.stats = this.persist.loadStats();
+    this.daily = this.persist.loadDaily();
     this.firstSessionEver = this.stats.firstSessionAt === null;
     if (this.firstSessionEver) {
       this.stats.firstSessionAt = Date.now();
@@ -741,6 +747,27 @@ class App {
     requestAnimationFrame((t2) => this.loop(t2));
   }
 
+  /** Android hardware back: behave like a native app would (§ store-readiness). */
+  handleBackButton(): 'minimize' | 'handled' {
+    const screen = document.querySelector('[data-screen]')?.getAttribute('data-screen');
+    if (screen === 'home') return 'minimize';
+    if (screen === 'pause') {
+      this.screens.clear();
+      this.updateBanner('game');
+      return 'handled';
+    }
+    if (screen === 'settings' || screen === 'gameover') {
+      this.showHome();
+      return 'handled';
+    }
+    if (screen === 'tutorial' || screen === 'continue-offer') return 'handled'; // explicit choice required
+    if (this.game && !this.game.state.over && !this.gameOverPending) {
+      this.screens.onPause?.(); // in-game back = pause, never data loss
+      return 'handled';
+    }
+    return 'minimize';
+  }
+
   // ---------------- test hooks ----------------
   mountTestHooks(): void {
     const hooks = {
@@ -796,16 +823,31 @@ class App {
   }
 }
 
-const app = new App();
-if (TEST_MODE || DEBUG_MODE) app.mountTestHooks();
-if (DEBUG_MODE) {
-  mountDebugPanel(app.config, {
-    gamesCompleted: () => String(app.director.state.totalGamesCompleted),
-    sinceInterstitial: () => String(app.director.state.gameOversSinceInterstitial),
-    removeAds: () => String(app.director.state.removeAdsOwned),
-  });
+async function boot(): Promise<void> {
+  const { Capacitor } = await import('@capacitor/core');
+  const native = Capacitor.isNativePlatform();
+  // Native: durable Preferences-backed storage, hydrated before anything reads.
+  const storage: Storage = native ? await HydratedNativeStorage.create() : new LocalStorageImpl();
+  const app = new App(storage);
+  if (native) {
+    void app.haptics.useNative();
+    void initNativeChrome({ onBackButton: () => app.handleBackButton() });
+  } else if ('serviceWorker' in navigator) {
+    // web/PWA only — a service worker inside the Capacitor shell is pointless
+    const { registerSW } = await import('virtual:pwa-register');
+    registerSW({ immediate: true });
+  }
+  if (TEST_MODE || DEBUG_MODE) app.mountTestHooks();
+  if (DEBUG_MODE) {
+    mountDebugPanel(app.config, {
+      gamesCompleted: () => String(app.director.state.totalGamesCompleted),
+      sinceInterstitial: () => String(app.director.state.gameOversSinceInterstitial),
+      removeAds: () => String(app.director.state.removeAdsOwned),
+    });
+  }
+  app.start();
 }
-app.start();
+void boot();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

@@ -10,6 +10,7 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false, // registered manually in main.ts, web only (not in the Capacitor shell)
       includeAssets: ['icons/apple-touch-icon.png'],
       manifest: {
         name: 'Cascade',
