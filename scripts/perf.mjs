@@ -42,16 +42,17 @@ async function main() {
   await page.evaluate(() => window.__cascade.newGame('normal'));
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
 
+  // Frames AND elapsed time are measured inside the page so a host-side stall
+  // (macOS App Nap of the node process) cannot corrupt the fps ratio.
   await page.evaluate(() => {
     window.__frames = 0;
+    window.__t0 = performance.now();
     const count = () => {
       window.__frames++;
       requestAnimationFrame(count);
     };
     requestAnimationFrame(count);
   });
-
-  const t0 = Date.now();
   for (let i = 0; i < 20; i++) {
     await page.evaluate((board) => {
       window.__cascade.injectState(
@@ -77,8 +78,10 @@ async function main() {
     }, chain2Board());
     await page.waitForTimeout(820); // let the full cascade animation + particles play
   }
-  const seconds = (Date.now() - t0) / 1000;
-  const frames = await page.evaluate(() => window.__frames);
+  const { frames, seconds } = await page.evaluate(() => ({
+    frames: window.__frames,
+    seconds: (performance.now() - window.__t0) / 1000,
+  }));
   const fps = frames / seconds;
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
   console.log(`[fps] ${frames} frames in ${seconds.toFixed(1)}s under 4x throttle → ${fps.toFixed(1)} fps`);

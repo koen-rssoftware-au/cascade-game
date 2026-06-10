@@ -251,7 +251,12 @@ export class Game {
     const state = deserializeGameState(json);
     const rng = createRng(1);
     rng.setState(state.rngState);
-    return new Game(state, rng);
+    const game = new Game(state, rng);
+    // Migration guard: a pre-rotation save can claim `over` although a rotation
+    // still fits under the updated §2.7. Game-over is a pure function of
+    // board+tray, so a stale flag is corrected (no-op for current-build saves).
+    if (game.st.over && game.hasAnyMove()) game.st.over = false;
+    return game;
   }
 
   /**

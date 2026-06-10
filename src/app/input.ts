@@ -1,4 +1,9 @@
-// Single-finger drag-and-drop (spec §1: no taps required mid-game except buttons).
+// Single-finger drag-and-drop + tap-to-rotate.
+// Tap vs drag is discriminated by DISTANCE only: touching a tray piece arms a
+// "pending" gesture with zero side effects; moving ≥ PROMOTE_DIST promotes it
+// to a real drag (ghost, pickup cue, landing preview). Releasing unpromoted —
+// however long the press — rotates. A slow or jittery tap can therefore never
+// accidentally place a piece, and rotation produces no pickup flicker.
 import type { PieceDef } from '../engine/types';
 import type { Renderer } from './renderer';
 
@@ -9,20 +14,20 @@ export interface InputCallbacks {
   onDrop(trayIndex: number, col: number, row: number): void;
   onPickup(): void;
   onCancelDrag(): void;
-  /** A quick tap on a tray piece (no real drag) — rotate it. */
+  /** A tap (press without real movement) on a tray piece — rotate it. */
   onTapTraySlot(trayIndex: number): void;
   enabled(): boolean;
 }
 
-const TAP_MAX_MS = 250;
-const TAP_MAX_DIST = 12;
+/** Movement (CSS px) that turns a press into a drag — above touch jitter. */
+const PROMOTE_DIST = 14;
 
 export class InputHandler {
   private activePointer: number | null = null;
   private trayIndex = -1;
-  private downAt = 0;
   private downX = 0;
   private downY = 0;
+  private pendingSlot: { piece: PieceDef; color: number } | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private renderer: Renderer, private cb: InputCallbacks) {
     canvas.addEventListener('pointerdown', this.onDown, { passive: false });
@@ -50,35 +55,41 @@ export class InputHandler {
         e.preventDefault();
         this.activePointer = e.pointerId;
         this.trayIndex = i;
-        this.downAt = performance.now();
         this.downX = x;
         this.downY = y;
+        this.pendingSlot = slot; // no ghost, no pickup cue, no preview yet
         try {
           this.canvas.setPointerCapture(e.pointerId);
         } catch {
           /* not critical */
         }
-        this.renderer.drag = {
-          piece: slot.piece,
-          color: slot.color,
-          x,
-          y,
-          trayIndexDrawSkip: i,
-          target: null,
-        };
-        this.updateTarget();
-        this.cb.onPickup();
         return;
       }
     }
   };
 
   private onMove = (e: PointerEvent): void => {
-    if (e.pointerId !== this.activePointer || !this.renderer.drag) return;
+    if (e.pointerId !== this.activePointer) return;
     e.preventDefault();
     const { x, y } = this.pos(e);
-    this.renderer.drag.x = x;
-    this.renderer.drag.y = y;
+    if (this.pendingSlot) {
+      if (Math.hypot(x - this.downX, y - this.downY) < PROMOTE_DIST) return;
+      // promote the press to a real drag
+      this.renderer.drag = {
+        piece: this.pendingSlot.piece,
+        color: this.pendingSlot.color,
+        x,
+        y,
+        trayIndexDrawSkip: this.trayIndex,
+        target: null,
+      };
+      this.pendingSlot = null;
+      this.cb.onPickup();
+    }
+    const drag = this.renderer.drag;
+    if (!drag) return;
+    drag.x = x;
+    drag.y = y;
     this.updateTarget();
   };
 
@@ -103,21 +114,19 @@ export class InputHandler {
   private onUp = (e: PointerEvent): void => {
     if (e.pointerId !== this.activePointer) return;
     e.preventDefault();
-    const drag = this.renderer.drag;
     const trayIndex = this.trayIndex;
+    const wasPending = this.pendingSlot !== null;
+    const drag = this.renderer.drag;
     this.activePointer = null;
     this.trayIndex = -1;
+    this.pendingSlot = null;
+    if (wasPending) {
+      this.cb.onTapTraySlot(trayIndex); // unpromoted press = rotate, any duration
+      return;
+    }
     if (!drag) return;
     const target = drag.target;
     this.renderer.drag = null;
-    const { x, y } = this.pos(e);
-    const isTap =
-      performance.now() - this.downAt < TAP_MAX_MS &&
-      Math.hypot(x - this.downX, y - this.downY) < TAP_MAX_DIST;
-    if (isTap) {
-      this.cb.onTapTraySlot(trayIndex); // tap = rotate (gameplay update)
-      return;
-    }
     if (target) {
       this.cb.onDrop(trayIndex, target.col, target.row);
     } else {
@@ -127,15 +136,18 @@ export class InputHandler {
 
   private onCancel = (e: PointerEvent): void => {
     if (e.pointerId !== this.activePointer) return;
+    const hadDrag = this.renderer.drag !== null;
     this.activePointer = null;
     this.trayIndex = -1;
+    this.pendingSlot = null;
     this.renderer.drag = null;
-    this.cb.onCancelDrag();
+    if (hadDrag) this.cb.onCancelDrag();
   };
 
   cancelActive(): void {
     this.activePointer = null;
     this.trayIndex = -1;
+    this.pendingSlot = null;
     this.renderer.drag = null;
   }
 }

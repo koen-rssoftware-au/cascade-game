@@ -1,35 +1,54 @@
 # Cascade — Verification Report (spec §7.6)
 
-Generated 2026-06-10. Build: see git history. Live: https://koen-rssoftware-au.github.io/cascade-game/
+Generated 2026-06-10 (updated same day for the gameplay update). Build: see git history.
+Live: https://koen-rssoftware-au.github.io/cascade-game/
 
 ## Verdict
 
 All automated suites green in two commands (`npm test`, `npm run test:e2e`), monetization
 suite included, bundle far under budget, performance targets exceeded. One documented spec
-inconsistency (max cascade chain, below). Manual QA checklist: automated where possible;
-remaining hand checks listed at the bottom.
+inconsistency (max cascade chain, below) and one deliberate post-spec gameplay addition
+(rotation + undo, below). Manual QA checklist: automated where possible; remaining hand
+checks listed at the bottom.
+
+## Post-spec gameplay additions (owner's request — deliberate §2.2 deviation)
+
+- **Tap-to-rotate:** tap a tray piece to rotate it a quarter turn (distance-based tap/drag
+  discrimination — a slow or jittery tap can never place a piece). Legality, game-over,
+  survivability and tray dimming are rotation-aware. Suites: `tests/unit/engine-rotation.test.ts`,
+  `tests/e2e/gameplay-update.spec.ts`. Pre-rotation saves migrate transparently (stale `over`
+  flags are recomputed on load).
+- **Undo (one per run):** restores the pre-placement snapshot, survives refresh (run save v2),
+  disabled the moment a run ends. Corrupt snapshots degrade gracefully.
+- **Idle hint** (8s → a placeable piece pulses), **"New best!" in-run moment**, **lifetime
+  stats** on the settings screen.
+- **Balance decision:** rotation lifts random-agent survivability from 18.8 → 32.1 placements
+  (+71%). A 3,000-game experiment showed §2.6 bag-weight tightening recovers ≤10% of that —
+  not worth deviating from the spec's pinned algorithm; weights kept unchanged (documented).
 
 ## Test counts
 
 | Suite | Command | Files | Tests | Status |
 |---|---|---|---|---|
-| Unit (engine §7.1 + monetization §9.7.1–2 + daily) | `npm test` | 14 | 149 | ✅ all pass |
+| Unit (engine §7.1 + rotation + monetization §9.7.1–2 + daily) | `npm test` | 15 | 162 | ✅ all pass |
 | Simulation (§7.2 + §9.7.6) | `npm test` (same run) | 3 | 17 | ✅ all pass |
-| E2E (§7.3 + §9.7.3–5 + regressions) | `npm run test:e2e` | 6 | 28 × 2 device profiles = 56 runs | ✅ all pass |
-| **Total** | | **20** | **166 unit/sim + 56 e2e runs** | ✅ |
+| E2E (§7.3 + §9.7.3–5 + gameplay update + regressions) | `npm run test:e2e` | 8 | 33 × 2 device profiles = 66 runs | ✅ all pass |
+| **Total** | | **23** | **179 unit/sim + 66 e2e runs** | ✅ |
 
 E2E runs on two profiles: Pixel 7 (Chromium/Android) and iPhone 14 (WebKit/iOS), each with a
 console-error watchdog — zero console errors or unhandled rejections across the whole suite (§7.3).
 
-## Soak statistics (§7.2, random agent, seeds 1..10000)
+## Soak statistics (§7.2, random agent, seeds 1..10000, rotation-aware)
 
 - **Games simulated:** 10,000 — zero exceptions, every game terminated, safety cap never hit
-- **Mean score (random agent):** 165.9 · mean placements/game: 18.8
-- **Mean score (greedy agent, 300 games):** 11,195.9 → **~60× random** (scoring rewards skill, §7.2 sanity ✅)
-- **Max cascade chain observed:** 2 (see "Spec inconsistency" below)
+- **Mean score (random agent):** 372.7 · mean placements/game: 32.1 (pre-rotation: 165.9 / 18.8 —
+  the shift is the expected rotation survivability buff)
+- **Mean score (greedy agent, 300 games):** 95,831.6 vs random 363.5 (scoring rewards skill, §7.2 sanity ✅)
+- **Max cascade chain observed:** 2 (see "Spec inconsistency" below — unchanged by rotation)
 - Invariants held on every placement: score non-decreasing, cells ∈ 0..8, cascade ≤ 64 steps,
   board settled (no full lines, gravity no-op) after every clearing placement
-- **Daily determinism:** same date seed + same moves → identical boards and scores; replay reproduces exactly
+- **Daily determinism:** same date seed + same moves (incl. rotations) → identical boards and
+  scores; replay reproduces exactly
 
 ## Monetization invariants (§9.7)
 
@@ -50,8 +69,8 @@ console-error watchdog — zero console errors or unhandled rejections across th
 
 | Check | Requirement | Measured | Status |
 |---|---|---|---|
-| fps under 4× CPU throttle, 20-cascade stress scene | ≥ 30 fps | **60.0 fps** | ✅ |
-| JS heap growth across 30 consecutive games | < 10 MB | **0.12 MB** | ✅ |
+| fps under 4× CPU throttle, 20-cascade stress scene | ≥ 30 fps | **59.4 fps** (post-update re-measure) | ✅ |
+| JS heap growth across 30 consecutive games | < 10 MB | **0.10 MB** | ✅ |
 | Lighthouse performance (built bundle) | pass | **100/100** (FCP 1.1s, TBT 0ms, CLS 0) | ✅ |
 | Cold load to interactive | < 2 s | 1.2 s (Lighthouse TTI, throttled) | ✅ |
 | Total payload | < 5 MB | **116 KB** (precache 13 entries ≈ 73 KB gzip-relevant JS 18.5 KB) | ✅ |

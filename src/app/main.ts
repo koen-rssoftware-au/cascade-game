@@ -109,7 +109,10 @@ class App {
         this.touch();
         this.audio.pickup();
       },
-      onCancelDrag: () => this.audio.illegal(),
+      onCancelDrag: () => {
+        this.touch(); // a released drag restarts the idle-hint window
+        this.audio.illegal();
+      },
       onTapTraySlot: (i) => this.rotateSlot(i),
       enabled: () => this.game !== null && !this.game.state.over && !this.gameOverPending,
     });
@@ -153,7 +156,9 @@ class App {
         this.game = game;
         this.undoUsed = saved.undoUsed;
         this.prevSnapshot = saved.prev;
-        this.newBestCelebrated = game.state.score > 0 && game.state.score >= this.stats.best;
+        // strict >, matching the live trigger — a run sitting exactly at best
+        // has not earned its moment yet
+        this.newBestCelebrated = game.state.score > this.stats.best;
         this.enterGameScreen();
         if (game.state.over) {
           // Killed between the game-ending placement and the game-over commit:
@@ -220,7 +225,7 @@ class App {
           this.game = game;
           this.undoUsed = saved.undoUsed;
           this.prevSnapshot = saved.prev;
-          this.newBestCelebrated = game.state.score > 0 && game.state.score >= this.stats.best;
+          this.newBestCelebrated = game.state.score > this.stats.best;
           this.enterGameScreen();
           return;
         }
@@ -335,21 +340,35 @@ class App {
     if (!game || game.state.over || this.gameOverPending) return;
     if (this.undoUsed || this.prevSnapshot === null) return;
     this.touch();
-    this.game = Game.deserialize(this.prevSnapshot);
+    let restored: Game;
+    try {
+      restored = Game.deserialize(this.prevSnapshot);
+    } catch {
+      // corrupt persisted snapshot — drop it instead of throwing in the click handler
+      this.prevSnapshot = null;
+      this.saveRunState();
+      this.updateUndoButton();
+      return;
+    }
+    this.game = restored;
     this.undoUsed = true;
     this.prevSnapshot = null;
+    // re-arm the new-best moment if the rolled-back score no longer beats best
+    this.newBestCelebrated = restored.state.score > this.stats.best;
     this.saveRunState();
-    this.displayedScore = this.game.state.score;
+    this.displayedScore = restored.state.score;
     this.renderer.fx.clearAll();
     this.renderer.reset();
-    this.renderer.setBoard(this.game.state.board);
+    this.renderer.setBoard(restored.state.board);
     this.syncTray();
     this.updateUndoButton();
     this.audio.illegal(); // soft "rewind" cue
   }
 
   private updateUndoButton(): void {
-    this.screens.setUndoEnabled(!this.undoUsed && this.prevSnapshot !== null);
+    // never render the button enabled in states where undo() refuses
+    const blocked = !this.game || this.game.state.over || this.gameOverPending;
+    this.screens.setUndoEnabled(!blocked && !this.undoUsed && this.prevSnapshot !== null);
   }
 
   private dropPiece(i: number, col: number, row: number): void {
@@ -439,6 +458,12 @@ class App {
           const res = game.applyContinueReward();
           this.prevSnapshot = null; // undo can never cross a continue grant
           this.saveRunState();
+          // reward clears count toward lifetime stats like any visual clear
+          if (res.steps.length > 0) {
+            for (const s of res.steps) this.stats.linesCleared += s.linesCleared;
+            if (res.boardAfter.every((c) => c === 0)) this.stats.allClears += 1;
+            this.persist.saveStats(this.stats);
+          }
           this.persist.appendEvent({ name: 'rewarded_completed', t: this.now(), data: { placement: 'continue' } });
           this.rewardedWatchedThisGameOver = true;
           if (!game.state.over) {
@@ -455,11 +480,11 @@ class App {
       }
     }
 
-    // 2) Commit the game over.
+    // 2) Commit the game over. Everything before clearRun() must stay IDEMPOTENT:
+    // a kill in this block replays the whole commit on the next boot (recovery).
     const isNewBest = score > this.stats.best;
     this.stats.best = Math.max(this.stats.best, score);
     this.stats.maxChainEver = Math.max(this.stats.maxChainEver, game.state.maxChain);
-    this.stats.gamesPlayed += 1;
     this.persist.saveStats(this.stats);
     const isDaily = game.state.mode === 'daily';
     // a daily counts for the day it was SEEDED, even when finished after midnight
@@ -474,6 +499,9 @@ class App {
       });
     }
     this.persist.clearRun();
+    // non-idempotent counter AFTER clearRun: a recovery replay can never double-count
+    this.stats.gamesPlayed += 1;
+    this.persist.saveStats(this.stats);
     this.director.recordGameOver();
     this.persist.saveMonetization(this.director.state);
     this.persist.appendEvent({
@@ -695,6 +723,7 @@ class App {
         !game.state.over &&
         !this.gameOverPending &&
         !this.renderer.animating &&
+        this.renderer.drag === null && // an active touch is input, not idleness
         t - this.lastInteractionAt > 8000
       ) {
         if (this.renderer.hintSlot === null) {

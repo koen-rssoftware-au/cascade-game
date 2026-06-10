@@ -48,8 +48,9 @@ function asTray(v: unknown): (TraySlot | null)[] {
     if (typeof color !== 'number' || !Number.isInteger(color) || color < 1 || color > 8) {
       fail('tray slot color must be an integer 1..8');
     }
-    // rot is absent in pre-rotation saves — default 0 keeps old runs loadable
-    const rot = rec['rot'] ?? 0;
+    // rot is ABSENT in pre-rotation saves — only a missing key defaults to 0;
+    // an explicit null/invalid value is corruption and must fail
+    const rot = rec['rot'] === undefined ? 0 : rec['rot'];
     if (rot !== 0 && rot !== 1 && rot !== 2 && rot !== 3) {
       fail('tray slot rot must be 0..3');
     }

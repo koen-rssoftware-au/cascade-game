@@ -58,21 +58,24 @@ body {
 }
 
 /* ---------- HUD (game screen, DOM for touch targets) ---------- */
+/* 1fr/auto/1fr grid: the score stays visually centered but can never paint
+   over (or hide) the pause/undo buttons, even at 6-digit scores on 375px. */
 #hud {
   height: var(--hud-h);
   flex-shrink: 0;
   display: none;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   padding: 0 10px;
   gap: 8px;
 }
 #hud.visible {
-  display: flex;
+  display: grid;
 }
 .hud-left {
   display: flex;
   gap: 8px;
+  justify-self: start;
 }
 .stats-compact {
   flex-wrap: wrap;
@@ -88,13 +91,12 @@ body {
 }
 /* §5.2: score top-center, best score small BESIDE it */
 .hud-score-wrap {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: baseline;
   gap: 8px;
   white-space: nowrap;
+  justify-self: center;
+  min-width: 0;
   pointer-events: none;
 }
 #hud-score {
@@ -112,6 +114,7 @@ body {
 #hud-streak {
   min-width: 44px;
   text-align: right;
+  justify-self: end;
   font-size: 15px;
   font-weight: 700;
   color: var(--accent-warm);

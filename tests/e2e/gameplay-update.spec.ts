@@ -56,6 +56,36 @@ test('tap rotates a tray piece and the rotated shape places correctly', async ({
   expect(state?.['score']).toBe(3);
 });
 
+test('a slow, stationary press rotates — it never places the piece', async ({ page }) => {
+  await seedProfile(page);
+  await gotoTest(page);
+  await page.locator('[data-testid="play"]').click();
+  await injectState(page, {
+    tray: [
+      { pieceId: 'P5', color: 2 },
+      { pieceId: 'P2', color: 3 },
+      { pieceId: 'P10', color: 4 },
+    ],
+  });
+  const pt = await page.evaluate(() => {
+    const w = window as never as {
+      __cascade: { canvasOffset(): { x: number; y: number }; trayRect(i: number): { x: number; y: number; w: number; h: number } | null };
+    };
+    const off = w.__cascade.canvasOffset();
+    const tray = w.__cascade.trayRect(0);
+    return tray ? { x: off.x + tray.x + tray.w / 2, y: off.y + tray.y + tray.h / 2 } : null;
+  });
+  if (!pt) throw new Error('tray empty');
+  await page.mouse.move(pt.x, pt.y);
+  await page.mouse.down();
+  await page.waitForTimeout(400); // slow press — used to fall through to a drop
+  await page.mouse.up();
+  const state = await getGameState(page);
+  expect((state?.['board'] as number[]).every((c) => c === 0)).toBe(true); // nothing placed
+  expect((state?.['tray'] as Array<{ rot: number }>)[0]?.rot).toBe(1); // rotated instead
+  expect(state?.['score']).toBe(0);
+});
+
 test('rotation survives a refresh', async ({ page }) => {
   await seedProfile(page);
   await gotoTest(page);

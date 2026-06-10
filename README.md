@@ -2,8 +2,10 @@
 
 Single-screen, offline, drag-and-drop block puzzle for mobile. Place pieces on an 8×8 grid,
 clear full rows/columns — and after a clear, blocks **fall**, so new lines can complete and
-chain ("cascades"). Built per [docs/cascade-game-scope.md](docs/cascade-game-scope.md);
-verification report in [VERIFICATION.md](VERIFICATION.md).
+chain ("cascades"). **Tap a tray piece to rotate it**; one **undo** per run. Built per
+[docs/cascade-game-scope.md](docs/cascade-game-scope.md) (rotation and undo are deliberate
+post-spec gameplay additions at the owner's request); verification report in
+[VERIFICATION.md](VERIFICATION.md).
 
 **Play it:** https://koen-rssoftware-au.github.io/cascade-game/
 
